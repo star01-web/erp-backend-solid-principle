@@ -1,9 +1,8 @@
 const sequelize = require('./common/db.config')
 const db = require('./common/index.db');
 const app = require('./app');
-const { fa } = require('zod/locales');
 const cors = require('cors');
-const HOST = process.env.SYSTEM_IP
+const HOST = process.env.SYSTEM_IP || 'localhost'
 app.use(cors());
 const startServer = async () => {
     try {

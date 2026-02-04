@@ -1,8 +1,7 @@
 const db = require('../../../common/db.config');
 const User = require('../models/user.model');
-const redisClient = require('../../../common/ridis.config');
 const jwt = require('jsonwebtoken');
-
+const { myCache } = require('../middleware/authMiddleware');
 
 // User Registration
 const Registration = async (req, res) => {
@@ -128,32 +127,29 @@ const logout = async (req, res) => {
             return res.status(400).json({ message: 'Token not provided' });
         }
 
+        // Token ko decode karke userId nikalne ke liye
         const decoded = jwt.decode(token);
         
-        if (!decoded) {
+        if (!decoded || !decoded.id) {
             return res.status(400).json({ message: 'Invalid Token' });
         }
 
         const userId = decoded.id;
 
-        // 👇 YAHAN CHANGE KIYA HAI (Key Name Match Hona Chahiye)
-        // Login/Middleware mein aapne 'auth_token' use kiya tha
-        const deleteResult = await redisClient.del(`auth_token:${userId}`);
+        // 1. Session Token Delete Karein (Redis ki jagah myCache use karein)
+        const isDeleted = myCache.del(`auth_token:${userId}`);
         
-        // Debugging ke liye check karein ki delete hua ya nahi
-        // 1 = Deleted, 0 = Key nahi mili
-        console.log(`Redis Delete Result for ID ${userId}:`, deleteResult); 
+        console.log(`Cache Delete Result for ID ${userId}:`, isDeleted); 
 
-        // Blacklist Logic (Ye sahi hai)
+        // 2. Blacklist Logic (Optional for local memory, par agar karna hai toh aise hoga)
         const expiresIn = decoded.exp - Math.floor(Date.now() / 1000);
 
         if (expiresIn > 0) {
-            await redisClient.set(`blacklist:${token}`, 'true', {
-                EX: expiresIn 
-            });
+            // Redis ke set ki jagah myCache.set use karein
+            myCache.set(`blacklist:${token}`, 'true', expiresIn);
         }
 
-        res.json({ message: 'Logged out & Data cleared from Redis successfully' });
+        res.json({ message: 'Logged out & Session cleared successfully' });
 
     } catch (error) {
         console.error('Logout Error:', error);
