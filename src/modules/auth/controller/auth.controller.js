@@ -3,20 +3,37 @@ const bcrypt = require('bcrypt');
 const User = require('../models/user.model');
 const { myCache } = require('../middleware/authMiddleware'); // Middleware se cache import karein
 
-const login = async (req, res) => {
+const login = async (req, res, next) => {
     try {
         const { email, password } = req.body;
+        
+        // Input validation
+        if (!email || !password) {
+            const error = new Error('Email and password are required');
+            error.status = 400;
+            throw error;
+        }
+
+        if (typeof email !== 'string' || typeof password !== 'string') {
+            const error = new Error('Email and password must be strings');
+            error.status = 400;
+            throw error;
+        }
         
         // 1. User find karein
         const user = await User.findOne({ where: { email } });
         if (!user) {
-            return res.status(400).json({ message: 'Invalid email' });
+            const error = new Error('Invalid email or password');
+            error.status = 401;
+            throw error;
         }
 
         // 2. Password check karein
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
-            return res.status(400).json({ message: 'Invalid password' });
+            const error = new Error('Invalid email or password');
+            error.status = 401;
+            throw error;
         }
 
         // 3. Token Generate
@@ -41,8 +58,8 @@ const login = async (req, res) => {
         res.json({ message: 'Login successful', token, user: userData });
 
     } catch (err) {
-        console.error('Login Error:', err);
-        res.status(500).json({ message: err.message }); 
+        console.error('Login Error:', err.message);
+        next(err);
     }
 }
 
