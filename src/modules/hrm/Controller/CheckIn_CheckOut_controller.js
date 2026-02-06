@@ -207,7 +207,55 @@ const handleCheckOut = async (req, res) => {
     }
 };
 
+const getTeamMembers = async (req, res) => {
+    try {
+        const loggedInUserId = req.user.id;
 
+        // 1. Employee find karna aur unka ID nikalna
+        // Hum sirf 'id' select kar rahe hain performance ke liye
+        const employeeProfile = await db.EmployeeMaster.findOne({
+            where: { userId: loggedInUserId },
+            attributes: ['id'] 
+        });
+
+        if (!employeeProfile) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Aapka employee record nahi mila." 
+            });
+        }
+
+        // 2. Un sabhi employees ko dhundhna jinka reporting manager ye user hai
+        const teamMembers = await db.EmployeeMaster.findAll({
+            where: { reporting_manager_id: employeeProfile.id },
+            attributes: ['id', 'emp_code', 'name', 'email', 'designation'],
+            // Optional: Team ko alphabetical order mein sort karne ke liye
+            order: [['name', 'ASC']] 
+        });
+
+        // 3. Response handle karna agar team empty ho
+        if (teamMembers.length === 0) {
+            return res.status(200).json({ 
+                success: true, 
+                message: "Aapke under koi team members nahi hain.",
+                teamMembers: [] 
+            });
+        }
+
+        return res.status(200).json({ 
+            success: true, 
+            count: teamMembers.length,
+            teamMembers 
+        });
+
+    } catch (error) {
+        console.error("Team Fetch Error:", error);
+        return res.status(500).json({ 
+            success: false, 
+            message: "Internal Server Error" 
+        });
+    }
+}
 
 const getAttendanceData = async (req, res) => {
     try {
@@ -307,4 +355,4 @@ const getAttendanceData = async (req, res) => {
         return res.status(500).json({ message: "Server Error", error: error.message });
     }
 };
-module.exports = { handleCheckIn, handleCheckOut,getAttendanceData };
+module.exports = { handleCheckIn, handleCheckOut,getAttendanceData, getTeamMembers };
