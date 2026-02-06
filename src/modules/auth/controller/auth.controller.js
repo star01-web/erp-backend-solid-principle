@@ -1,42 +1,41 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/user.model');
-const { myCache } = require('../middleware/authMiddleware'); // Middleware se cache import karein
-const EmployeeMaster = require('../models/user.model'); // Employee Master model import karein
+const EmployeeMaster = require('../../hrm/model/EmployeeMaster'); // ✅ Sahi path check karein
+const { myCache } = require('../middleware/authMiddleware');
 
 const login = async (req, res, next) => {
     try {
         const { email, password } = req.body;
-        
-        // 1. User find karein aur EmployeeMaster se 'position' fetch karein
-        // Yahan hum Sequelize ka 'include' use kar rahe hain
-        const user = await User.findOne({ 
-            where: { email },
-            include: [{
-                model: EmployeeMaster,
-                attributes: ['position'] // Sirf position field chahiye
-            }]
-        });
+
+        // 1. User find karein (Bina include ke, crash se bachne ke liye)
+        const user = await User.findOne({ where: { email } });
 
         if (!user) {
-            const error = new Error('Invalid email or password');
-            error.status = 401;
-            throw error;
+            return res.status(401).json({ success: false, message: 'Invalid email or password' });
         }
 
         // 2. Password check karein
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
-            const error = new Error('Invalid email or password');
-            error.status = 401;
-            throw error;
+            return res.status(401).json({ success: false, message: 'Invalid email or password' });
         }
 
-        // EmployeeMaster se position extract karein (association name ke mutabiq)
-        // Agar association ka naam 'EmployeeDetail' hai toh:
-        const userPosition = user.EmployeeMaster ? user.EmployeeMaster.position : 'N/A';
+        // 3. Employee Master se Position alag se fetch karein (Safe Method)
+        let userPosition = 'N/A';
+        try {
+            const empDetail = await EmployeeMaster.findOne({ 
+                where: { user_id: user.id } // DB mein check karein column 'userId' hai ya 'user_id'
+            });
+            if (empDetail) {
+                userPosition = empDetail.position;
+            }
+        } catch (empErr) {
+            console.error("EmployeeMaster Fetch Error:", empErr.message);
+            // Agar employee table mein error aaye tab bhi login na ruke
+        }
 
-        // 3. Token Generate (Payload mein position bhi dal sakte hain)
+        // 4. Token Generate
         const token = jwt.sign(
             { id: user.id, email: user.email, role: user.role, position: userPosition },
             process.env.JWT_SECRET || 'your_secret_key', 
@@ -48,21 +47,23 @@ const login = async (req, res, next) => {
             name: user.name,
             email: user.email,
             role: user.role,
-            position: userPosition, // <--- Employee Master se aayi hui position
+            position: userPosition,
             loginTime: new Date()
         };
 
-        // 4. Cache mein store karein
+        // 5. Cache store
         myCache.set(`auth_token:${user.id}`, token, 72000);
 
-        res.json({ message: 'Login successful', token, user: userData });
+        return res.json({ success: true, message: 'Login successful', token, user: userData });
 
     } catch (err) {
-        console.error('Login Error:', err.message);
-        next(err);
+        console.error('--- SERVER CRASH ERROR ---');
+        console.error(err); // Isse terminal mein asli wajah dikhegi
+        return res.status(500).json({ 
+            success: false, 
+            message: 'Internal Server Error: ' + err.message 
+        });
     }
 }
 
-module.exports = {
-    login, 
-};
+module.exports = { login };
