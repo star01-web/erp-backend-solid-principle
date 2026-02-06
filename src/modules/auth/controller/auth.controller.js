@@ -24,15 +24,31 @@ const login = async (req, res, next) => {
         // 3. Employee Master se Position alag se fetch karein (Safe Method)
         let userPosition = 'N/A';
         try {
-            const empDetail = await EmployeeMaster.findOne({ 
-                where: { user_id: user.id } // DB mein check karein column 'userId' hai ya 'user_id'
+            // Method 1: Search by user_id
+            let empDetail = await EmployeeMaster.findOne({ 
+                where: { user_id: user.id }
             });
+            
+            // Method 2: Fallback - Search by email agar user_id se nahi mila
+            if (!empDetail) {
+                empDetail = await EmployeeMaster.findOne({ 
+                    where: { email: user.email }
+                });
+                // Agar email se mil gaya toh userId ko update kar do
+                if (empDetail) {
+                    await empDetail.update({ user_id: user.id });
+                    console.log('✅ Updated user_id for:', user.email);
+                }
+            }
+            
             if (empDetail) {
                 userPosition = empDetail.position;
+                console.log('💼 Position fetched:', userPosition);
+            } else {
+                console.warn('⚠️  No employee record found');
             }
         } catch (empErr) {
-            console.error("EmployeeMaster Fetch Error:", empErr.message);
-            // Agar employee table mein error aaye tab bhi login na ruke
+            console.error("❌ EmployeeMaster Fetch Error:", empErr.message);
         }
 
         // 4. Token Generate

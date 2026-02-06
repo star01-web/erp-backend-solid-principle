@@ -65,7 +65,12 @@ const EmployeeMaster = sequelize.define('EmployeeMaster', {
             model: 'hrm_employee_master',
             key: 'employee_master_id'
         }
-    }
+    },
+  user_id: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    field: 'userId'
+  }
 }, {
   tableName: 'hrm_employee_master', 
   timestamps: true 
