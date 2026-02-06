@@ -129,4 +129,41 @@ const updateEmployee = async (req, res) => {
     }
 };
 
-module.exports = { CreateEmployee, updateEmployee };
+
+const getallEmployee = async (req, res) => {
+    try {
+        const employees = await db.EmployeeMaster.findAll({
+            attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position']
+        });
+        res.json({ employees });
+    } catch (error) {
+        console.error("Get All Employees Error:", error);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+};
+
+const getEmployeeProfile = async (req, res) => {
+    try {
+        // Bearer Token middleware se user id yahan milti hai
+        const loggedInId = req.user.id; 
+
+        // Agar params mein ID hai toh wo use karein, nahi toh loggedInId
+        const targetId = req.params.id || loggedInId;
+
+        const employee = await db.EmployeeMaster.findByPk(targetId, {
+            // Aapke project ke fields ke hisaab se attributes
+            attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position']
+        });
+
+        if (!employee) {
+            return res.status(404).json({ message: "Employee not found." });
+        }
+
+        res.json(employee); 
+    } catch (error) {
+        console.error("Get Employee Profile Error:", error);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+};
+
+module.exports = { CreateEmployee, updateEmployee, getallEmployee, getEmployeeProfile };
