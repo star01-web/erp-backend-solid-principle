@@ -1,16 +1,15 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/user.model');
-const EmployeeMaster = require('../../hrm/model/EmployeeMaster'); // ✅ Sahi path check karein
+const EmployeeMaster = require('../../hrm/model/EmployeeMaster'); // Sahi path confirm karein
 const { myCache } = require('../middleware/authMiddleware');
 
-const login = async (req, res, next) => {
+const login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // 1. User find karein (Bina include ke, crash se bachne ke liye)
+        // 1. User find karein
         const user = await User.findOne({ where: { email } });
-
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid email or password' });
         }
@@ -21,60 +20,66 @@ const login = async (req, res, next) => {
             return res.status(401).json({ success: false, message: 'Invalid email or password' });
         }
 
-        // 3. Employee Master se Position alag se fetch karein (Safe Method)
-        let userPosition = 'N/A';
+        // 3. Supervisor ka apna full data fetch karein
+        let employeeProfile = null;
+        let teamMembers = [];
+
         try {
-            // Method 1: Search by user_id
-            let empDetail = await EmployeeMaster.findOne({ 
-                where: { user_id: user.id }
+            // Supervisor ki profile
+            employeeProfile = await EmployeeMaster.findOne({ 
+                where: { 
+                    [Op.or]: [{ user_id: user.id }, { email: user.email }] 
+                }
             });
-            
-            // Method 2: Fallback - Search by email agar user_id se nahi mila
-            if (!empDetail) {
-                empDetail = await EmployeeMaster.findOne({ 
-                    where: { email: user.email }
+
+            if (employeeProfile) {
+                // Agar profile mili, toh uski ID ko as a 'reporting_manager_id' use karke team dhoondhein
+                teamMembers = await EmployeeMaster.findAll({
+                    where: { 
+                        reporting_manager_id: user.id // Ya employeeProfile.id jo bhi aapke DB mein mapped ho
+                    },
+                    attributes: ['id', 'emp_code', 'first_name', 'last_name', 'position', 'profile_pc', 'department']
                 });
-                // Agar email se mil gaya toh userId ko update kar do
-                if (empDetail) {
-                    await empDetail.update({ user_id: user.id });
-                    console.log('✅ Updated user_id for:', user.email);
+                
+                // Agar user_id missing tha toh update kar dein (Auto-link)
+                if (!employeeProfile.user_id) {
+                    await employeeProfile.update({ user_id: user.id });
                 }
             }
-            
-            if (empDetail) {
-                userPosition = empDetail.position;
-                console.log('💼 Position fetched:', userPosition);
-            } else {
-                console.warn('⚠️  No employee record found');
-            }
         } catch (empErr) {
-            console.error("❌ EmployeeMaster Fetch Error:", empErr.message);
+            console.error("Employee Table Error:", empErr.message);
         }
 
         // 4. Token Generate
         const token = jwt.sign(
-            { id: user.id, email: user.email, role: user.role, position: userPosition },
+            { id: user.id, email: user.email, role: user.role, position: employeeProfile?.position || 'N/A' },
             process.env.JWT_SECRET || 'your_secret_key', 
             { expiresIn: '20h' }
         );
 
+        // 5. Final Response Object
         const userData = {
             id: user.id,
             name: user.name,
             email: user.email,
             role: user.role,
-            position: userPosition,
+            profile: employeeProfile, // Supervisor ki details
+            team: teamMembers,         // Supervisor ki team ki list
             loginTime: new Date()
         };
 
-        // 5. Cache store
+        // 6. Cache and Send Response
         myCache.set(`auth_token:${user.id}`, token, 72000);
 
-        return res.json({ success: true, message: 'Login successful', token, user: userData });
+        return res.json({ 
+            success: true, 
+            message: 'Login successful', 
+            token, 
+            user: userData 
+        });
 
     } catch (err) {
-        console.error('--- SERVER CRASH ERROR ---');
-        console.error(err); // Isse terminal mein asli wajah dikhegi
+        console.error('--- SERVER ERROR ---', err);
         return res.status(500).json({ 
             success: false, 
             message: 'Internal Server Error: ' + err.message 
