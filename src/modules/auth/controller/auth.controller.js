@@ -57,7 +57,7 @@ const login = async (req, res) => {
                         // Is column ka naam apne DB mein check karein (reporting_manager_id / supervisor_id)
                         reporting_manager_id: user.id 
                     },
-                    attributes: ['id', 'emp_code', 'first_name', 'last_name', 'position', 'email']
+                    attributes: ['id', 'emp_code', 'first_name', 'last_name', 'email']
                 });
             } catch (teamErr) {
                 console.error("❌ Team Fetch Error:", teamErr.message);
@@ -69,8 +69,7 @@ const login = async (req, res) => {
             { 
                 id: user.id, 
                 email: user.email, 
-                role: user.role, 
-                position: employeeProfile?.position || 'N/A' 
+                role: user.role 
             },
             process.env.JWT_SECRET || 'your_secret_key', 
             { expiresIn: '20h' }
@@ -82,7 +81,6 @@ const login = async (req, res) => {
             name: user.name,
             email: user.email,
             role: user.role,
-            position: employeeProfile?.position || 'N/A',
             profile: employeeProfile, // Ab yahan data aayega
             team: teamMembers,         // Supervisor ki team list
             loginTime: new Date()

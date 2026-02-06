@@ -32,12 +32,12 @@ const User = sequelize.define('User', {
         allowNull: false,
     },
     role: {
-        type: DataTypes.ENUM('ADMIN', 'ACCOUNTS', 'HR', 'FACTORY_MANAGER', 'INVENTORY_MANAGER', 'SALES', 'EMPLOYEE'),
+        type: DataTypes.ENUM('ADMIN', 'ACCOUNTS', 'HR', 'FACTORY_MANAGER', 'INVENTORY_MANAGER', 'SALES', 'EMPLOYEE', 'Technical-Seupervisor', 'Technical-Team'),
         allowNull: false,
     }
     
 }, {
-    timestamps: true,
+    timestamps: true,   
     hooks: {
         // Hook 1: Jab naya user bane
         beforeCreate: async (user) => {
