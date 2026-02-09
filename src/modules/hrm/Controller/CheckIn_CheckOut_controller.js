@@ -228,7 +228,7 @@ const getTeamMembers = async (req, res) => {
         const teamMembers = await db.EmployeeMaster.findAll({
             where: { reporting_manager_id: employeeProfile.id },
             // Sirf wahi columns jo logs ke mutabiq DB mein exist karte hain
-            attributes: ['id', 'emp_code', 'name', 'email'], 
+            attributes: ['id', 'emp_code', 'name', 'phone', 'address', 'email', 'position', 'location_id', 'supervisor_id', 'userId','reporting_manager_id'], 
             order: [['name', 'ASC']] 
         });
 
