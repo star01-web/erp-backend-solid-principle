@@ -211,8 +211,7 @@ const getTeamMembers = async (req, res) => {
     try {
         const loggedInUserId = req.user.id;
 
-        // 1. Employee find karna aur unka ID nikalna
-        // Hum sirf 'id' select kar rahe hain performance ke liye
+        // 1. Employee profile check karein
         const employeeProfile = await db.EmployeeMaster.findOne({
             where: { userId: loggedInUserId },
             attributes: ['id'] 
@@ -225,34 +224,26 @@ const getTeamMembers = async (req, res) => {
             });
         }
 
-        // 2. Un sabhi employees ko dhundhna jinka reporting manager ye user hai
+        // 2. Team members find karein (Fix: 'designation' column removed)
         const teamMembers = await db.EmployeeMaster.findAll({
             where: { reporting_manager_id: employeeProfile.id },
-            attributes: ['id', 'emp_code', 'name', 'email', 'designation'],
-            // Optional: Team ko alphabetical order mein sort karne ke liye
+            // Sirf wahi columns jo logs ke mutabiq DB mein exist karte hain
+            attributes: ['id', 'emp_code', 'name', 'email'], 
             order: [['name', 'ASC']] 
         });
 
-        // 3. Response handle karna agar team empty ho
-        if (teamMembers.length === 0) {
-            return res.status(200).json({ 
-                success: true, 
-                message: "Aapke under koi team members nahi hain.",
-                teamMembers: [] 
-            });
-        }
-
+        // 3. Response
         return res.status(200).json({ 
             success: true, 
             count: teamMembers.length,
-            teamMembers 
+            teamMembers: teamMembers || [] 
         });
 
     } catch (error) {
-        console.error("Team Fetch Error:", error);
+        console.error("❌ Team Fetch Error:", error.message);
         return res.status(500).json({ 
             success: false, 
-            message: "Internal Server Error" 
+            message: "Internal Server Error"
         });
     }
 }
