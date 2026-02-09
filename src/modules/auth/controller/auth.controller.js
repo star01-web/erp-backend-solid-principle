@@ -1,14 +1,8 @@
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const { Op } = require('sequelize');
-const db = require('../../../common/index.db'); // Sahi path check karein (User, EmployeeMaster yahan se aayenge)
-const { myCache } = require('../middleware/authMiddleware');
-
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // 1. User table se primary record find karein
+        // 1. User table se record find karein
         const user = await db.User.findOne({ where: { email } });
 
         if (!user) {
@@ -21,75 +15,62 @@ const login = async (req, res) => {
             return res.status(401).json({ success: false, message: 'Invalid email or password' });
         }
 
-        // 3. Employee Master se profile data fetch karein
-        let employeeProfile = null;
-        try {
-            // Priority 1: user_id se search
-            // Priority 2: email se search (Fallback)
-            employeeProfile = await db.EmployeeMaster.findOne({
-                where: {
-                    [Op.or]: [
-                        { user_id: user.id },
-                        { email: user.email }
-                    ]
-                }
-            });
-
-            if (employeeProfile) {
-                // Agar email se mila lekin user_id linked nahi hai, toh link kar dein
-                if (!employeeProfile.user_id) {
-                    await employeeProfile.update({ user_id: user.id });
-                    console.log(`✅ Linked user_id for: ${user.email}`);
-                }
-                // Sequelize instance ko plain JSON mein badlein
-                employeeProfile = employeeProfile.get({ plain: true });
+        // 3. Employee Master se profile fetch karein
+        let employeeProfile = await db.EmployeeMaster.findOne({
+            where: {
+                [Op.or]: [
+                    { user_id: user.id },
+                    { email: user.email }
+                ]
             }
-        } catch (err) {
-            console.error("❌ EmployeeMaster Fetch Error:", err.message);
-        }
+        });
 
-        // 4. Supervisor ke under ki Team fetch karein (Agar profile mili hai)
         let teamMembers = [];
         if (employeeProfile) {
+            // Agar email se mila par user_id link nahi hai, toh link karein
+            if (!employeeProfile.user_id) {
+                await employeeProfile.update({ user_id: user.id });
+            }
+
+            // --- HIERARCHY LOGIC: supervisor_id use kiya gaya hai ---
             try {
                 teamMembers = await db.EmployeeMaster.findAll({
                     where: { 
-                        // Is column ka naam apne DB mein check karein (reporting_manager_id / supervisor_id)
-                        reporting_manager_id: user.id 
+                        // Team members ka supervisor_id is employee ki ID honi chahiye
+                        supervisor_id: employeeProfile.id 
                     },
-                    attributes: ['id', 'emp_code', 'first_name', 'last_name', 'email']
+                    attributes: ['id', 'emp_code', 'name', 'email', 'position']
                 });
             } catch (teamErr) {
                 console.error("❌ Team Fetch Error:", teamErr.message);
             }
+            
+            employeeProfile = employeeProfile.get({ plain: true });
         }
 
-        // 5. JWT Token Generate karein
+        // 4. JWT Token Generate karein
         const token = jwt.sign(
-            { 
-                id: user.id, 
-                email: user.email, 
-                role: user.role 
-            },
+            { id: user.id, email: user.email, role: user.role },
             process.env.JWT_SECRET || 'your_secret_key', 
             { expiresIn: '20h' }
         );
 
-        // 6. Final User Data Structure
+        // 5. Final User Data Structure (Frontend ke liye)
         const userData = {
-            id: user.id,
+            id: user.id,                       // User Table ID
+            hrm_employee_id: employeeProfile ? employeeProfile.id : null, // Asli Supervisor ID
             name: user.name,
             email: user.email,
             role: user.role,
-            profile: employeeProfile, // Ab yahan data aayega
-            team: teamMembers,         // Supervisor ki team list
+            position: employeeProfile ? employeeProfile.position : null,
+            profile: employeeProfile,
+            team: teamMembers,
             loginTime: new Date()
         };
 
-        // 7. Cache Store
+        // 6. Cache Store
         myCache.set(`auth_token:${user.id}`, token, 72000);
 
-        // Success Response
         return res.json({ 
             success: true, 
             message: 'Login successful', 
@@ -99,11 +80,6 @@ const login = async (req, res) => {
 
     } catch (err) {
         console.error('--- SERVER CRASH ERROR ---', err);
-        return res.status(500).json({ 
-            success: false, 
-            message: 'Internal Server Error: ' + err.message 
-        });
+        return res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
 };
-
-module.exports = { login };
