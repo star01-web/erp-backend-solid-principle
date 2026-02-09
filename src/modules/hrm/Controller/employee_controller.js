@@ -144,25 +144,33 @@ const getallEmployee = async (req, res) => {
 
 const getEmployeeProfile = async (req, res) => {
     try {
-        // Bearer Token middleware se user id yahan milti hai
-        const loggedInId = req.user.id; 
+        // 1. Auth middleware (JWT) ne token verify karke user id yahan set kar di hai
+        const loggedInUserId = req.user.id; 
 
-        // Agar params mein ID hai toh wo use karein, nahi toh loggedInId
-        const targetId = req.params.id || loggedInId;
-
-        const employee = await db.EmployeeMaster.findByPk(targetId, {
-            // Aapke project ke fields ke hisaab se attributes
+        // 2. FIND ONE use karein: HRM table mein 'userId' column match karein
+        const employee = await db.EmployeeMaster.findOne({
+            where: { 
+                userId: loggedInUserId // Token wali ID ko HRM table ki userId se match karein
+            },
             attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position']
         });
 
         if (!employee) {
-            return res.status(404).json({ message: "Employee not found." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Aapka HRM profile record nahi mila." 
+            });
         }
 
-        res.json(employee); 
+        // 3. Response bhej dein
+        return res.status(200).json({
+            success: true,
+            data: employee
+        });
+
     } catch (error) {
-        console.error("Get Employee Profile Error:", error);
-        res.status(500).json({ message: "Internal Server Error" });
+        console.error("❌ Profile Fetch Error:", error.message);
+        return res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 };
 
