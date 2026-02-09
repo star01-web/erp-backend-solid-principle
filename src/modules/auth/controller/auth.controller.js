@@ -1,3 +1,9 @@
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const { Op } = require('sequelize');
+const db = require('../../../common/index.db'); // Sahi path check karein (User, EmployeeMaster yahan se aayenge)
+const { myCache } = require('../middleware/authMiddleware');
+
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -84,6 +90,4 @@ const login = async (req, res) => {
     }
 };
 
-module.exports = {
-    login
-};
+module.exports = { login };
