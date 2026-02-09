@@ -211,7 +211,6 @@ const getTeamMembers = async (req, res) => {
     try {
         const loggedInUserId = req.user.id;
 
-        // 1. Employee profile check karein
         const employeeProfile = await db.EmployeeMaster.findOne({
             where: { userId: loggedInUserId },
             attributes: ['id'] 
@@ -224,15 +223,17 @@ const getTeamMembers = async (req, res) => {
             });
         }
 
-        // 2. Team members find karein (Fix: 'designation' column removed)
         const teamMembers = await db.EmployeeMaster.findAll({
             where: { reporting_manager_id: employeeProfile.id },
-            // Sirf wahi columns jo logs ke mutabiq DB mein exist karte hain
-            attributes: ['id', 'emp_code', 'name', 'phone', 'address', 'email', 'position', 'location_id', 'supervisor_id', 'userId','reporting_manager_id'], 
+            // Attributes updated as per your new list
+            attributes: [
+                'id', 'emp_code', 'name', 'phone', 'address', 
+                'email', 'position', 'location_id', 'supervisor_id', 
+                'userId', 'reporting_manager_id'
+            ], 
             order: [['name', 'ASC']] 
         });
 
-        // 3. Response
         return res.status(200).json({ 
             success: true, 
             count: teamMembers.length,
@@ -240,10 +241,12 @@ const getTeamMembers = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Team Fetch Error:", error.message);
+        // Production logs ke liye detailed error
+        console.error("❌ Team Fetch Error:", error); 
         return res.status(500).json({ 
             success: false, 
-            message: "Internal Server Error"
+            message: "Internal Server Error",
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 }
