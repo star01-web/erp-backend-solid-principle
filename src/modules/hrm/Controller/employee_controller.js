@@ -1,5 +1,6 @@
 const EmployeeMaster = require('../model/EmployeeMaster.js');
 const db = require('../../../common/index.db.js');
+const { Op } = require('sequelize');
 // const { createEmployeeMiddleware } = require('../middleware/createEmployee_mw.js');
 // const bcrypt = require('bcrypt');
 
@@ -144,25 +145,38 @@ const getallEmployee = async (req, res) => {
 
 const getEmployeeProfile = async (req, res) => {
     try {
-        // 1. Auth middleware (JWT) ne token verify karke user id yahan set kar di hai
-        const loggedInUserId = req.user.id; 
+        // 1. Auth middleware (JWT) se values nikalna
+        const userIdFromToken = req.user.id;
+        const emailFromToken = req.user.email;
 
-        // 2. FIND ONE use karein: HRM table mein 'userId' column match karein
+        // 2. Database query: userId OR email dono mein se koi bhi match ho jaye
         const employee = await db.EmployeeMaster.findOne({
-            where: { 
-                userId: loggedInUserId // Token wali ID ko HRM table ki userId se match karein
+            where: {
+                [Op.or]: [
+                    { userId: userIdFromToken },
+                    { email: emailFromToken }
+                ]
             },
-            attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position']
+            attributes: [
+                'id', 
+                'emp_code', 
+                'name', 
+                'email', 
+                'phone', 
+                'department', 
+                'position'
+            ]
         });
 
+        // 3. Agar record nahi milta
         if (!employee) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Aapka HRM profile record nahi mila." 
+                message: "Aapka HRM profile record ID ya Email se nahi mila." 
             });
         }
 
-        // 3. Response bhej dein
+        // 4. Response bhej dein
         return res.status(200).json({
             success: true,
             data: employee
@@ -170,7 +184,11 @@ const getEmployeeProfile = async (req, res) => {
 
     } catch (error) {
         console.error("❌ Profile Fetch Error:", error.message);
-        return res.status(500).json({ success: false, message: "Internal Server Error" });
+        return res.status(500).json({ 
+            success: false, 
+            message: "Internal Server Error",
+            error: error.message 
+        });
     }
 };
 
