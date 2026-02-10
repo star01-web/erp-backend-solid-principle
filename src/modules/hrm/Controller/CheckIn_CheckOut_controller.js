@@ -253,47 +253,44 @@ const getTeamMembers = async (req, res) => {
 
 const getAttendanceData = async (req, res) => {
     try {
-        const { date, employeeId } = req.query;
+        // 1. Current Month ki range nikalna
+        const now = new Date();
+        // Mahine ki pehli date (e.g., 2024-03-01 00:00:00)
+        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        // Mahine ki aakhri date (e.g., 2024-03-31 23:59:59)
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-        // 1. Token se User ID nikalna
+        // 2. Token se User ID aur Role nikalna
         const loggedInUserId = req.user.id;
         const loggedInUserRole = req.user.role ? req.user.role.toUpperCase() : '';
 
-        // 2. Requester ki profile fetch karein (Department check karne ke liye)
+        // 3. Requester ki profile fetch karein
         const requesterProfile = await db.EmployeeMaster.findOne({
             where: { userId: loggedInUserId }
         });
 
         if (!requesterProfile) {
-            return res.status(404).json({ message: "Requester employee profile not found." });
+            return res.status(404).json({ success: false, message: "Profile not found." });
         }
 
         const userDept = requesterProfile.department ? requesterProfile.department.toUpperCase() : '';
 
-        // 3. Date Filtering logic
-        const searchDate = date ? new Date(date) : new Date();
-        const startOfDay = new Date(searchDate.setHours(0, 0, 0, 0));
-        const endOfDay = new Date(searchDate.setHours(23, 59, 59, 999));
-
-        // 4. Access Control Logic
+        // 4. Access Control & Condition
         const isPrivilegedUser = 
             loggedInUserRole === 'ADMIN' || 
             userDept === 'HR' || 
             userDept === 'ACCOUNTS';
 
+        // Filter: Sirf is mahine ka data
         const whereCondition = {
-            checkInTime: { [Op.between]: [startOfDay, endOfDay] }
+            checkInTime: { [Op.between]: [firstDayOfMonth, lastDayOfMonth] }
         };
 
         if (!isPrivilegedUser) {
-            // Normal Employee: Sirf apna data dekh sakta hai
             whereCondition.employeeId = requesterProfile.id;
-        } else if (employeeId) {
-            // Admin/HR/Accounts: Specific employee ka data dekh sakte hain agar query mein bheja ho
-            whereCondition.employeeId = employeeId;
         }
 
-        // 5. Fetch Check-Ins with Employee Details
+        // 5. Fetch Records
         const attendanceRecords = await db.CheckIn.findAll({
             where: whereCondition,
             include: [{
@@ -301,52 +298,140 @@ const getAttendanceData = async (req, res) => {
                 as: 'employee',
                 attributes: ['name', 'emp_code', 'department']
             }],
-            order: [['checkInTime', 'DESC']]
+            order: [['checkInTime', 'DESC']] // Latest data sabse upar
         });
 
-        // 6. Report taiyar karein aur Check-Out data merge karein
+        // 6. Detailed Report (Merging Check-Outs)
         const detailedReport = await Promise.all(attendanceRecords.map(async (checkIn) => {
             const checkOut = await db.CheckOut.findOne({
                 where: {
                     employeeId: checkIn.employeeId,
-                    checkOutTime: { [Op.between]: [startOfDay, endOfDay] }
+                    // Check-out bhi usi din ka dhoondein
+                    checkOutTime: { 
+                        [Op.between]: [
+                            new Date(checkIn.checkInTime).setHours(0,0,0,0), 
+                            new Date(checkIn.checkInTime).setHours(23,59,59,999)
+                        ] 
+                    }
                 }
             });
 
             return {
-                employee_name: checkIn.employee?.name || 'N/A',
-                emp_code: checkIn.employee?.emp_code || 'N/A',
-                department: checkIn.employee?.department || 'N/A',
-                date: startOfDay.toISOString().split('T')[0],
-                check_in: {
-                    time: checkIn.checkInTime,
-                    address: checkIn.address,
-                    lat: checkIn.latitude,
-                    lng: checkIn.longitude,
-                    status: "Present"
-                },
-                check_out: checkOut ? {
-                    time: checkOut.checkOutTime,
-                    address: checkOut.address,
-                    working_hours: checkOut.working_hours,
-                    status: "Completed"
-                } : {
-                    status: "Pending/Working"
-                }
+                id: checkIn.id,
+                name: checkIn.employee?.name || 'N/A',
+                empId: checkIn.employee?.emp_code || 'N/A',
+                dept: checkIn.employee?.department || 'N/A',
+                date: new Date(checkIn.checkInTime).toISOString().split('T')[0],
+                checkIn: checkIn.checkInTime ? new Date(checkIn.checkInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--',
+                checkOut: checkOut?.checkOutTime ? new Date(checkOut.checkOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--',
+                totalHours: checkOut?.working_hours || '0h',
+                status: checkOut ? "Completed" : "Working"
             };
         }));
 
+        // 7. Final Response
         return res.status(200).json({
-            status: "Success",
-            requested_by: requesterProfile.name,
-            role_access: isPrivilegedUser ? "Full Access" : "Self Only",
+            success: true,
+            message: `Attendance data for ${now.toLocaleString('default', { month: 'long' })} ${now.getFullYear()}`,
             count: detailedReport.length,
             data: detailedReport
         });
 
     } catch (error) {
         console.error("Report Error:", error);
-        return res.status(500).json({ message: "Server Error", error: error.message });
+        return res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
     }
 };
-module.exports = { handleCheckIn, handleCheckOut,getAttendanceData, getTeamMembers };
+
+const getFilteredAttendance = async (req, res) => {
+    try {
+        // Frontend se params lena: ?startDate=2024-01-01&endDate=2024-01-10&employeeId=12
+        const { startDate, endDate, employeeId } = req.query;
+
+        // 1. Date Validation & Formatting
+        if (!startDate || !endDate) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide both startDate and endDate."
+            });
+        }
+
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+
+        // 2. User Permission Check (Token se)
+        const loggedInUserRole = req.user.role ? req.user.role.toUpperCase() : '';
+        const loggedInUserId = req.user.id;
+
+        const requester = await db.EmployeeMaster.findOne({ where: { userId: loggedInUserId } });
+        const userDept = requester?.department?.toUpperCase() || '';
+
+        const isPrivileged = ['ADMIN', 'HR', 'ACCOUNTS'].includes(loggedInUserRole) || 
+                            ['HR', 'ACCOUNTS'].includes(userDept);
+
+        // 3. Query Condition Build Karna
+        const whereCondition = {
+            checkInTime: { [Op.between]: [start, end] }
+        };
+
+        // Agar Admin nahi hai, toh wo sirf apna data filter kar sakta hai
+        if (!isPrivileged) {
+            whereCondition.employeeId = requester.id;
+        } else if (employeeId) {
+            // Admin kisi bhi specific employee ka data filter kar sakta hai
+            whereCondition.employeeId = employeeId;
+        }
+
+        // 4. Data Fetching
+        const records = await db.CheckIn.findAll({
+            where: whereCondition,
+            include: [{
+                model: db.EmployeeMaster,
+                as: 'employee',
+                attributes: ['name', 'emp_code', 'department']
+            }],
+            order: [['checkInTime', 'ASC']] // Filtered data purane se naye ki taraf (ASC)
+        });
+
+        // 5. Check-Out Data Merge Logic
+        const report = await Promise.all(records.map(async (checkIn) => {
+            const checkOut = await db.CheckOut.findOne({
+                where: {
+                    employeeId: checkIn.employeeId,
+                    checkOutTime: { 
+                        [Op.between]: [
+                            new Date(checkIn.checkInTime).setHours(0,0,0,0), 
+                            new Date(checkIn.checkInTime).setHours(23,59,59,999)
+                        ] 
+                    }
+                }
+            });
+
+            return {
+                id: checkIn.id,
+                name: checkIn.employee?.name,
+                empId: checkIn.employee?.emp_code,
+                date: new Date(checkIn.checkInTime).toISOString().split('T')[0],
+                checkIn: checkIn.checkInTime,
+                checkOut: checkOut?.checkOutTime || null,
+                totalHours: checkOut?.working_hours || '0h',
+                status: checkOut ? "Completed" : "In-Progress"
+            };
+        }));
+
+        return res.status(200).json({
+            success: true,
+            results: report.length,
+            dateRange: { from: start, to: end },
+            data: report
+        });
+
+    } catch (error) {
+        console.error("Filter API Error:", error);
+        return res.status(500).json({ success: false, message: "Server Error", error: error.message });
+    }
+};
+module.exports = { handleCheckIn, handleCheckOut,getAttendanceData, getTeamMembers, getFilteredAttendance };
