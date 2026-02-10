@@ -145,11 +145,13 @@ const getallEmployee = async (req, res) => {
 
 const getEmployeeProfile = async (req, res) => {
     try {
-        // 1. Auth middleware (JWT) se values nikalna
+        // 1. Token se data nikalna
         const userIdFromToken = req.user.id;
         const emailFromToken = req.user.email;
 
-        // 2. Database query: userId OR email dono mein se koi bhi match ho jaye
+        console.log(`🔍 Searching Profile for - ID: ${userIdFromToken}, Email: ${emailFromToken}`);
+
+        // 2. Database query with fallback
         const employee = await db.EmployeeMaster.findOne({
             where: {
                 [Op.or]: [
@@ -157,24 +159,29 @@ const getEmployeeProfile = async (req, res) => {
                     { email: emailFromToken }
                 ]
             },
+            // ⚠️ Attributes ko dhyan se check karein
             attributes: [
                 'id', 
-                'emp_code', 
+                'emp_code', // Check karein DB mein yahi name hai na?
                 'name', 
                 'email', 
                 'phone', 
                 'department', 
                 'position'
-            ]
+            ],
+            raw: true // 👈 Isse simple JSON milega, Sequelize metadata nahi
         });
 
-        // 3. Agar record nahi milta
+        // 3. Record validation
         if (!employee) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Aapka HRM profile record ID ya Email se nahi mila." 
+                message: "Aapka Profile record nahi mila." 
             });
         }
+
+        // --- DEBUGGING LOG ---
+        console.log("✅ Profile Data Found:", employee);
 
         // 4. Response bhej dein
         return res.status(200).json({
