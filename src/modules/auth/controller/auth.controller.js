@@ -56,7 +56,7 @@ const login = async (req, res) => {
 
         // 4. JWT Token Generate karein
         const token = jwt.sign(
-            { id: user.id, email: user.email, role: user.role },
+            { id: user.id, email: user.email, role: user.role, hrm_employee_id: employeeProfile ? employeeProfile.id : null },
             process.env.JWT_SECRET || 'your_secret_key', 
             { expiresIn: '20h' }
         );
