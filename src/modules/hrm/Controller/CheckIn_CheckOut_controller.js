@@ -209,27 +209,16 @@ const handleCheckOut = async (req, res) => {
 
 const getTeamMembers = async (req, res) => {
     try {
-        const loggedInUserId = req.user.id;
+        // Aapke login data se 'hrm_employee_id' mil rahi hai
+        // Ensure karein ki aapka auth middleware req.user mein 'hrm_employee_id' bhej raha hai
+        const supervisorId = req.user.hrm_employee_id; 
 
-        const employeeProfile = await db.EmployeeMaster.findOne({
-            where: { userId: loggedInUserId },
-            attributes: ['id'] 
-        });
-
-        if (!employeeProfile) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Aapka employee record nahi mila." 
-            });
-        }
+        console.log("🔍 Fetching team for Supervisor ID:", supervisorId);
 
         const teamMembers = await db.EmployeeMaster.findAll({
-            where: { reporting_manager_id: employeeProfile.id },
-            // Attributes updated as per your new list
+            where: { supervisor_id: supervisorId }, // ✅ Yeh link perfect hai
             attributes: [
-                'id', 'emp_code', 'name', 'phone', 'address', 
-                'email', 'position', 'location_id', 'supervisor_id', 
-                'userId', 'reporting_manager_id'
+                'id', 'emp_code', 'name', 'phone', 'email', 'position'
             ], 
             order: [['name', 'ASC']] 
         });
@@ -237,17 +226,12 @@ const getTeamMembers = async (req, res) => {
         return res.status(200).json({ 
             success: true, 
             count: teamMembers.length,
-            teamMembers: teamMembers || [] 
+            teamMembers: teamMembers 
         });
 
     } catch (error) {
-        // Production logs ke liye detailed error
         console.error("❌ Team Fetch Error:", error); 
-        return res.status(500).json({ 
-            success: false, 
-            message: "Internal Server Error",
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+        return res.status(500).json({ success: false, message: "Server Error" });
     }
 }
 
