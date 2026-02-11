@@ -22,19 +22,24 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
 // Helper function: Lat/Log se Address nikalne ke liye 
 const getAddressFromOSM = async (lat, lon) => {
     try {
-        // OSM Nominatim URL
         const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`;
         
         const response = await axios.get(url, {
             headers: { 
                 'User-Agent': 'StarERP_HRM_System' 
-            }
+            },
+            timeout: 5000 // 5 seconds ka timeout (Zaroori hai)
         });
 
-        return response.data.display_name || "Address not found";
+        // Pura address return karne ke bajaye aap thoda saaf address bhi nikal sakte hain
+        return response.data.display_name || `Lat: ${lat}, Lon: ${lon}`;
+        
     } catch (error) {
-        console.error("OSM Error:", error.message);
-        return "Location fetch error";
+        // Agar internet slow ho ya OSM down ho, toh server ko crash mat hone do
+        console.error("❌ OSM Fetch Error:", error.message);
+        
+        // Fallback: Address ki jagah coordinates bhej do taaki attendance ruk na jaye
+        return `Coordinates: ${lat}, ${lon}`;
     }
 };
 
@@ -42,7 +47,6 @@ const handleCheckIn = async (req, res) => {
     try {
         const { employee_ids, latitude, longitude } = req.body;
 
-        // 1. Auth & Profile Check
         if (!req.user || !req.user.id) return res.status(401).json({ message: "Unauthorized." });
 
         const loggedInUserId = req.user.id; 
@@ -51,15 +55,17 @@ const handleCheckIn = async (req, res) => {
         if (!requesterProfile) return res.status(404).json({ message: "Profile not found." });
 
         const requesterEmpId = requesterProfile.id;
-        const userPosition = requesterProfile.position?.toLowerCase().trim() || '';
-
-        // 2. Determine target employees
-        let targetEmployeeIds = (userPosition === 'site supervisor' && Array.isArray(employee_ids)) 
+        
+        // --- 2. Determine target employees (FIXED LOGIC) ---
+        // Agar employee_ids array aa raha hai aur length > 0 hai, toh bulk consider karo
+        let targetEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0) 
                                 ? employee_ids 
                                 : [requesterEmpId];
 
-        // 3. Prevent Duplicate Check-in for Today
-        const startOfDay = new Date().setHours(0, 0, 0, 0);
+        // --- 3. Prevent Duplicate Check-in for Today ---
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
         const alreadyCheckedIn = await db.CheckIn.findAll({
             where: {
                 employeeId: { [Op.in]: targetEmployeeIds },
@@ -69,31 +75,32 @@ const handleCheckIn = async (req, res) => {
         });
 
         const checkedInIds = alreadyCheckedIn.map(rec => rec.employeeId);
-        // Filter out those who have already checked in today
         const finalIdsToPunch = targetEmployeeIds.filter(id => !checkedInIds.includes(id));
 
         if (finalIdsToPunch.length === 0) {
-            return res.status(400).json({ message: "All selected employees have already checked in today." });
+            return res.status(400).json({ message: "Selected employees already checked in today." });
         }
 
-        // 4. Geofencing Validation
+        // --- 4. Geofencing Validation ---
+        // Note: Bulk mein hum supervisor ki location ko hi benchmark maan rahe hain
         const employeesToPunch = await db.EmployeeMaster.findAll({
             where: { id: { [Op.in]: finalIdsToPunch } },
             include: [{ model: db.OfficeLocation, as: 'location' }]
         });
 
+        // Loop checks if ALL selected employees are within their respective fence
         for (const emp of employeesToPunch) {
-            if (!emp.location) continue; // Ya error return karein
+            if (!emp.location) continue; 
 
             const distance = getDistance(latitude, longitude, emp.location.latitude, emp.location.longitude);
             if (distance > (emp.location.radius || 100)) {
                 return res.status(403).json({ 
-                    message: `${emp.name} is too far (${Math.round(distance)}m). Attendance denied.` 
+                    message: `${emp.name} location se bahut door hain (${Math.round(distance)}m).` 
                 });
             }
         }
 
-        // 5. Processing & Saving
+        // --- 5. Processing & Saving ---
         const finalAddress = await getAddressFromOSM(latitude, longitude);
         const now = new Date();
 
@@ -103,21 +110,22 @@ const handleCheckIn = async (req, res) => {
             latitude,
             longitude,
             address: finalAddress,
-            marked_by: requesterEmpId 
+            marked_by: requesterEmpId // Kisne punch kiya (Supervisor ID)
         }));
 
+        // ✅ Yeh line bulk create karegi
         const records = await db.CheckIn.bulkCreate(checkInDataArray);
 
         return res.status(201).json({
-            status: "Success",
-            message: `${records.length} Check-in(s) recorded.`,
+            success: true,
+            message: `${records.length} logo ka Check-in successfully ho gaya.`,
             address: finalAddress,
             data: records
         });
 
     } catch (error) {
         console.error("CheckIn Controller Error:", error);
-        return res.status(500).json({ message: "Internal Server Error", error: error.message });
+        return res.status(500).json({ message: "Internal Server Error" });
     }
 };
 
@@ -126,57 +134,67 @@ const handleCheckOut = async (req, res) => {
     try {
         const { employee_ids, latitude, longitude } = req.body;
 
-        // 1. Auth & Profile Check
+        // 1. Auth Check
         if (!req.user?.id) return res.status(401).json({ message: "Unauthorized." });
 
         const requesterProfile = await db.EmployeeMaster.findOne({ where: { userId: req.user.id } });
         if (!requesterProfile) return res.status(404).json({ message: "Profile not found." });
 
-        // 2. Authorization
-        const userPosition = requesterProfile.position?.toLowerCase().trim() || '';
-        let targetEmployeeIds = (userPosition === 'site supervisor' && Array.isArray(employee_ids)) 
-                                ? employee_ids 
-                                : [requesterProfile.id];
+        const requesterEmpId = requesterProfile.id;
 
-        // 3. Geofencing (Radius Check)
-        const employees = await db.EmployeeMaster.findAll({
-            where: { id: { [Op.in]: targetEmployeeIds } },
-            include: [{ model: db.OfficeLocation, as: 'location' }]
-        });
+        // 2. Authorization (Flexible Logic)
+        // Agar employee_ids array hai, toh bulk consider karo, warna single.
+        let targetEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0) 
+                                ? employee_ids 
+                                : [requesterEmpId];
+
+        // 3. Geofencing & Data Fetch (Parallel)
+        const [employees, finalAddress] = await Promise.all([
+            db.EmployeeMaster.findAll({
+                where: { id: { [Op.in]: targetEmployeeIds } },
+                include: [{ model: db.OfficeLocation, as: 'location' }]
+            }),
+            getAddressFromOSM(latitude, longitude) // Address fetch karne ka function
+        ]);
 
         for (const emp of employees) {
-            if (!emp.location) return res.status(400).json({ message: `${emp.name} location missing.` });
+            if (!emp.location) continue;
             const distance = getDistance(latitude, longitude, emp.location.latitude, emp.location.longitude);
             if (distance > (emp.location.radius || 100)) {
-                return res.status(403).json({ message: `${emp.name} is outside office radius.` });
+                return res.status(403).json({ 
+                    message: `${emp.name} location se door hain (${Math.round(distance)}m).` 
+                });
             }
         }
 
-        // 4. Time & Bulk Fetch (Optimization)
+        // 4. Today's Transactions Fetch
         const now = new Date();
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
 
-        // Saare check-ins ek baar mein fetch karein
-        const allCheckIns = await db.CheckIn.findAll({
-            where: { 
-                employeeId: { [Op.in]: targetEmployeeIds }, 
-                checkInTime: { [Op.gte]: todayStart } 
-            }
-        });
+        const [allCheckIns, allCheckOuts] = await Promise.all([
+            db.CheckIn.findAll({
+                where: { 
+                    employeeId: { [Op.in]: targetEmployeeIds }, 
+                    checkInTime: { [Op.gte]: todayStart } 
+                },
+                order: [['checkInTime', 'DESC']] // Latest check-in pehle
+            }),
+            db.CheckOut.findAll({
+                where: { 
+                    employeeId: { [Op.in]: targetEmployeeIds }, 
+                    checkOutTime: { [Op.gte]: todayStart } 
+                }
+            })
+        ]);
 
-        // Saare check-outs ek baar mein fetch karein
-        const allCheckOuts = await db.CheckOut.findAll({
-            where: { 
-                employeeId: { [Op.in]: targetEmployeeIds }, 
-                checkOutTime: { [Op.gte]: todayStart } 
-            }
-        });
-
+        // 5. Build Check-Out Data
         const checkOutDataArray = [];
         
         targetEmployeeIds.forEach(empId => {
+            // Us employee ka aaj ka latest check-in dhundho
             const lastIn = allCheckIns.find(ci => ci.employeeId === empId);
+            // Check karo ki kya wo aaj pehle hi check-out kar chuka hai
             const alreadyOut = allCheckOuts.find(co => co.employeeId === empId);
 
             if (lastIn && !alreadyOut) {
@@ -186,24 +204,33 @@ const handleCheckOut = async (req, res) => {
                 checkOutDataArray.push({
                     employeeId: empId,
                     checkOutTime: now,
-                    latitude, longitude,
-                    address: "Fetched Address", // API call result yahan dalye
-                    marked_by: requesterProfile.id,
+                    latitude, 
+                    longitude,
+                    address: finalAddress,
+                    marked_by: requesterEmpId,
                     working_hours: hoursCalculated
                 });
             }
         });
 
         if (checkOutDataArray.length === 0) {
-            return res.status(400).json({ message: "No valid check-ins to check-out." });
+            return res.status(400).json({ 
+                message: "Check-out nahi ho saka. Ya toh check-in nahi kiya, ya pehle hi check-out ho chuka hai." 
+            });
         }
 
+        // 6. Bulk Create
         const records = await db.CheckOut.bulkCreate(checkOutDataArray);
-        return res.status(201).json({ status: "Success", data: records });
+
+        return res.status(201).json({ 
+            success: true, 
+            message: `${records.length} logo ka Check-out recorded.`,
+            data: records 
+        });
 
     } catch (error) {
         console.error("CheckOut Error:", error);
-        return res.status(500).json({ message: "Server Error" });
+        return res.status(500).json({ message: "Internal Server Error" });
     }
 };
 
