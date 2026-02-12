@@ -264,16 +264,13 @@ const getTeamMembers = async (req, res) => {
 
 const getAttendanceData = async (req, res) => {
     try {
-        // 1. Current Month ki range nikalna (IST safe way)
         const now = new Date();
         const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
         const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-        // 2. Token se User ID aur Role nikalna
         const loggedInUserId = req.user.id;
         const loggedInUserRole = req.user.role ? req.user.role.toUpperCase() : '';
 
-        // 3. Requester ki profile fetch karein
         const requesterProfile = await db.EmployeeMaster.findOne({
             where: { userId: loggedInUserId }
         });
@@ -284,21 +281,32 @@ const getAttendanceData = async (req, res) => {
 
         const userDept = requesterProfile.department ? requesterProfile.department.toUpperCase() : '';
 
-        // 4. Access Control & Condition
+        // --- TEAM LOGIC START ---
         const isPrivilegedUser = 
             loggedInUserRole === 'ADMIN' || 
             userDept === 'HR' || 
             userDept === 'ACCOUNTS';
 
-        const whereCondition = {
+        let whereCondition = {
             checkInTime: { [Op.between]: [firstDayOfMonth, lastDayOfMonth] }
         };
 
         if (!isPrivilegedUser) {
-            whereCondition.employeeId = requesterProfile.id;
-        }
+            // Step A: Apni team ke members ki IDs nikalein
+            const teamMembers = await db.EmployeeMaster.findAll({
+                where: { supervisor_id: requesterProfile.id },
+                attributes: ['id']
+            });
 
-        // 5. Fetch Records
+            const teamIds = teamMembers.map(m => m.id);
+            
+            // Step B: Filter mein khud ki ID + Team ki IDs daalein
+            whereCondition.employeeId = {
+                [Op.in]: [requesterProfile.id, ...teamIds]
+            };
+        }
+        // --- TEAM LOGIC END ---
+
         const attendanceRecords = await db.CheckIn.findAll({
             where: whereCondition,
             include: [{
@@ -309,7 +317,16 @@ const getAttendanceData = async (req, res) => {
             order: [['checkInTime', 'DESC']]
         });
 
-        // 6. Detailed Report (Timezone Fix Applied Here)
+        const toIST = (dateObj) => {
+            if (!dateObj) return '--:--';
+            return new Date(dateObj).toLocaleTimeString('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true
+            }).toUpperCase();
+        };
+
         const detailedReport = await Promise.all(attendanceRecords.map(async (checkIn) => {
             const checkOut = await db.CheckOut.findOne({
                 where: {
@@ -323,25 +340,11 @@ const getAttendanceData = async (req, res) => {
                 }
             });
 
-            // Helper function to format time consistently to IST
-            const toIST = (dateObj) => {
-                if (!dateObj) return '--:--';
-                return new Date(dateObj).toLocaleTimeString('en-IN', {
-                    timeZone: 'Asia/Kolkata',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true
-                }).toUpperCase();
-            };
-
             return {
                 id: checkIn.id,
                 name: checkIn.employee?.name || 'N/A',
                 empId: checkIn.employee?.emp_code || 'N/A',
-                dept: checkIn.employee?.department || 'N/A',
-                // Date formatting
                 date: new Date(checkIn.checkInTime).toLocaleDateString('en-GB').split('/').join('-'), 
-                // Timezone fixed times
                 checkIn: toIST(checkIn.checkInTime),
                 checkOut: toIST(checkOut?.checkOutTime),
                 totalHours: checkOut?.working_hours || '0h',
@@ -349,17 +352,15 @@ const getAttendanceData = async (req, res) => {
             };
         }));
 
-        // 7. Final Response
         return res.status(200).json({
             success: true,
-            message: `Attendance data for ${now.toLocaleString('default', { month: 'long' })} ${now.getFullYear()}`,
             count: detailedReport.length,
             data: detailedReport
         });
 
     } catch (error) {
         console.error("Report Error:", error);
-        return res.status(500).json({ success: false, message: "Internal Server Error", error: error.message });
+        return res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 };
 
