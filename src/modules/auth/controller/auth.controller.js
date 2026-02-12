@@ -1,27 +1,26 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { Op } = require('sequelize');
-const db = require('../../../common/index.db'); // Sahi path check karein (User, EmployeeMaster yahan se aayenge)
+const db = require('../../../common/index.db');
 const { myCache } = require('../middleware/authMiddleware');
 
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // 1. User table se record find karein
+        // 1. User find karein
         const user = await db.User.findOne({ where: { email } });
-
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid email or password' });
         }
 
-        // 2. Password compare karein
+        // 2. Password check
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
             return res.status(401).json({ success: false, message: 'Invalid email or password' });
         }
 
-        // 3. Employee Master se profile fetch karein
+        // 3. Employee Profile Fetch
         let employeeProfile = await db.EmployeeMaster.findOne({
             where: {
                 [Op.or]: [
@@ -33,19 +32,16 @@ const login = async (req, res) => {
 
         let teamMembers = [];
         if (employeeProfile) {
-            // Agar email se mila par user_id link nahi hai, toh link karein
+            // Email se mila par user_id link nahi hai, toh link karein
             if (!employeeProfile.user_id) {
                 await employeeProfile.update({ user_id: user.id });
             }
 
-            // --- HIERARCHY LOGIC: supervisor_id use kiya gaya hai ---
+            // Team members fetch karein
             try {
                 teamMembers = await db.EmployeeMaster.findAll({
-                    where: { 
-                        // Team members ka supervisor_id is employee ki ID honi chahiye
-                        supervisor_id: employeeProfile.id 
-                    },
-                    attributes: ['id', 'emp_code', 'name', 'email', 'position']
+                    where: { supervisor_id: employeeProfile.id },
+                    attributes: ['id', 'emp_code', 'name', "phone", "address", 'email', "department", 'position']
                 });
             } catch (teamErr) {
                 console.error("❌ Team Fetch Error:", teamErr.message);
@@ -54,24 +50,38 @@ const login = async (req, res) => {
             employeeProfile = employeeProfile.get({ plain: true });
         }
 
-        // 4. JWT Token Generate karein
+        // 4. JWT Token
         const token = jwt.sign(
-            { id: user.id, email: user.email, role: user.role, hrm_employee_id: employeeProfile ? employeeProfile.id : null },
+            { 
+                id: user.id, 
+                email: user.email, 
+                role: user.role, 
+                hrm_employee_id: employeeProfile ? employeeProfile.id : null 
+            },
             process.env.JWT_SECRET || 'your_secret_key', 
             { expiresIn: '20h' }
         );
 
-        // 5. Final User Data Structure (Frontend ke liye)
+        // --- TIMEZONE FIX FOR LOGIN TIME ---
+        const loginTimeIST = new Date().toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour12: true,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+
+        // 5. Final Data Structure
         const userData = {
-            id: user.id,                       // User Table ID
-            hrm_employee_id: employeeProfile ? employeeProfile.id : null, // Asli Supervisor ID
+            id: user.id,
+            hrm_employee_id: employeeProfile ? employeeProfile.id : null,
             name: user.name,
             email: user.email,
             role: user.role,
             position: employeeProfile ? employeeProfile.position : null,
-            profile: employeeProfile,
+            profile: employeeProfile, // Isme ab pura data (Phone, Dept, etc.) milega
             team: teamMembers,
-            loginTime: new Date()
+            loginTime: loginTimeIST // Ab ye frontend par sahi dikhega
         };
 
         // 6. Cache Store
@@ -85,7 +95,7 @@ const login = async (req, res) => {
         });
 
     } catch (err) {
-        console.error('--- SERVER CRASH ERROR ---', err);
+        console.error('--- LOGIN ERROR ---', err);
         return res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
 };
