@@ -264,11 +264,9 @@ const getTeamMembers = async (req, res) => {
 
 const getAttendanceData = async (req, res) => {
     try {
-        // 1. Current Month ki range nikalna
+        // 1. Current Month ki range nikalna (IST safe way)
         const now = new Date();
-        // Mahine ki pehli date (e.g., 2024-03-01 00:00:00)
         const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-        // Mahine ki aakhri date (e.g., 2024-03-31 23:59:59)
         const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
         // 2. Token se User ID aur Role nikalna
@@ -292,7 +290,6 @@ const getAttendanceData = async (req, res) => {
             userDept === 'HR' || 
             userDept === 'ACCOUNTS';
 
-        // Filter: Sirf is mahine ka data
         const whereCondition = {
             checkInTime: { [Op.between]: [firstDayOfMonth, lastDayOfMonth] }
         };
@@ -309,15 +306,14 @@ const getAttendanceData = async (req, res) => {
                 as: 'employee',
                 attributes: ['name', 'emp_code', 'department']
             }],
-            order: [['checkInTime', 'DESC']] // Latest data sabse upar
+            order: [['checkInTime', 'DESC']]
         });
 
-        // 6. Detailed Report (Merging Check-Outs)
+        // 6. Detailed Report (Timezone Fix Applied Here)
         const detailedReport = await Promise.all(attendanceRecords.map(async (checkIn) => {
             const checkOut = await db.CheckOut.findOne({
                 where: {
                     employeeId: checkIn.employeeId,
-                    // Check-out bhi usi din ka dhoondein
                     checkOutTime: { 
                         [Op.between]: [
                             new Date(checkIn.checkInTime).setHours(0,0,0,0), 
@@ -327,14 +323,27 @@ const getAttendanceData = async (req, res) => {
                 }
             });
 
+            // Helper function to format time consistently to IST
+            const toIST = (dateObj) => {
+                if (!dateObj) return '--:--';
+                return new Date(dateObj).toLocaleTimeString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                }).toUpperCase();
+            };
+
             return {
                 id: checkIn.id,
                 name: checkIn.employee?.name || 'N/A',
                 empId: checkIn.employee?.emp_code || 'N/A',
                 dept: checkIn.employee?.department || 'N/A',
-                date: new Date(checkIn.checkInTime).toISOString().split('T')[0],
-                checkIn: checkIn.checkInTime ? new Date(checkIn.checkInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--',
-                checkOut: checkOut?.checkOutTime ? new Date(checkOut.checkOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--',
+                // Date formatting
+                date: new Date(checkIn.checkInTime).toLocaleDateString('en-GB').split('/').join('-'), 
+                // Timezone fixed times
+                checkIn: toIST(checkIn.checkInTime),
+                checkOut: toIST(checkOut?.checkOutTime),
                 totalHours: checkOut?.working_hours || '0h',
                 status: checkOut ? "Completed" : "Working"
             };
