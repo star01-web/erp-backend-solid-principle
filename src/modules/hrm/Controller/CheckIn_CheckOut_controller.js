@@ -264,9 +264,12 @@ const getTeamMembers = async (req, res) => {
 
 const getAttendanceData = async (req, res) => {
     try {
+        // Frontend se start aur end date aayegi toh filter zyada accurate hoga
+        const { startDate, endDate } = req.query;
+
         const now = new Date();
-        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        const start = startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        const end = endDate ? new Date(endDate) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
         const loggedInUserId = req.user.id;
         const loggedInUserRole = req.user.role ? req.user.role.toUpperCase() : '';
@@ -281,40 +284,46 @@ const getAttendanceData = async (req, res) => {
 
         const userDept = requesterProfile.department ? requesterProfile.department.toUpperCase() : '';
 
-        // --- TEAM LOGIC START ---
+        // --- TEAM LOGIC ---
         const isPrivilegedUser = 
             loggedInUserRole === 'ADMIN' || 
             userDept === 'HR' || 
             userDept === 'ACCOUNTS';
 
         let whereCondition = {
-            checkInTime: { [Op.between]: [firstDayOfMonth, lastDayOfMonth] }
+            checkInTime: { [Op.between]: [start, end] }
         };
 
         if (!isPrivilegedUser) {
-            // Step A: Apni team ke members ki IDs nikalein
             const teamMembers = await db.EmployeeMaster.findAll({
                 where: { supervisor_id: requesterProfile.id },
                 attributes: ['id']
             });
-
             const teamIds = teamMembers.map(m => m.id);
-            
-            // Step B: Filter mein khud ki ID + Team ki IDs daalein
-            whereCondition.employeeId = {
-                [Op.in]: [requesterProfile.id, ...teamIds]
-            };
+            whereCondition.employeeId = { [Op.in]: [requesterProfile.id, ...teamIds] };
         }
-        // --- TEAM LOGIC END ---
 
+        // --- OPTIMIZED DATA FETCHING ---
+        // Ek hi baar mein CheckIn aur CheckOut dono nikal rahe hain
         const attendanceRecords = await db.CheckIn.findAll({
             where: whereCondition,
-            include: [{
-                model: db.EmployeeMaster,
-                as: 'employee',
-                attributes: ['name', 'emp_code', 'department']
-            }],
+            include: [
+                {
+                    model: db.EmployeeMaster,
+                    as: 'employee',
+                    attributes: ['name', 'emp_code', 'department']
+                }
+            ],
             order: [['checkInTime', 'DESC']]
+        });
+
+        // Saare CheckOuts ek hi query mein (N+1 fix)
+        const employeeIds = attendanceRecords.map(r => r.employeeId);
+        const checkOuts = await db.CheckOut.findAll({
+            where: {
+                employeeId: { [Op.in]: employeeIds },
+                checkOutTime: { [Op.between]: [start, end] }
+            }
         });
 
         const toIST = (dateObj) => {
@@ -327,30 +336,25 @@ const getAttendanceData = async (req, res) => {
             }).toUpperCase();
         };
 
-        const detailedReport = await Promise.all(attendanceRecords.map(async (checkIn) => {
-            const checkOut = await db.CheckOut.findOne({
-                where: {
-                    employeeId: checkIn.employeeId,
-                    checkOutTime: { 
-                        [Op.between]: [
-                            new Date(checkIn.checkInTime).setHours(0,0,0,0), 
-                            new Date(checkIn.checkInTime).setHours(23,59,59,999)
-                        ] 
-                    }
-                }
-            });
+        // Data mapping
+        const detailedReport = attendanceRecords.map((checkIn) => {
+            // Memory mein filter kar rahe hain database ki jagah
+            const checkOut = checkOuts.find(co => 
+                co.employeeId === checkIn.employeeId && 
+                new Date(co.checkOutTime).toDateString() === new Date(checkIn.checkInTime).toDateString()
+            );
 
             return {
                 id: checkIn.id,
                 name: checkIn.employee?.name || 'N/A',
                 empId: checkIn.employee?.emp_code || 'N/A',
-                date: new Date(checkIn.checkInTime).toLocaleDateString('en-GB').split('/').join('-'), 
+                date: new Date(checkIn.checkInTime).toLocaleDateString('en-GB').replace(/\//g, '-'), 
                 checkIn: toIST(checkIn.checkInTime),
                 checkOut: toIST(checkOut?.checkOutTime),
                 totalHours: checkOut?.working_hours || '0h',
                 status: checkOut ? "Completed" : "Working"
             };
-        }));
+        });
 
         return res.status(200).json({
             success: true,
