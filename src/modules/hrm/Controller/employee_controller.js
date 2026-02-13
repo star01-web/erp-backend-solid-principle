@@ -143,53 +143,51 @@ const getallEmployee = async (req, res) => {
     }
 };
 
+
 const getEmployeeProfile = async (req, res) => {
     try {
-        const userIdFromToken = req.user.id;
+        // Token se email aur id nikalna
         const emailFromToken = req.user.email;
+        const userIdFromToken = req.user.id;
 
-        console.log(`🔍 Finding Profile for - ID: ${userIdFromToken}, Email: ${emailFromToken}`);
+        console.log(`🔍 Profile Search: Email - ${emailFromToken}, UserID - ${userIdFromToken}`);
 
-        // Email aur UserID dono se dhoondhein
+        // Email se search karna sabse safe hai kyunki console mein email dikh raha hai
         const employee = await db.EmployeeMaster.findOne({
             where: {
                 [Op.or]: [
-                    { user_id: userIdFromToken }, // Model field
-                    { userId: userIdFromToken },  // Possible field name check
-                    { email: emailFromToken }     // Email Fallback (Most Reliable)
+                    { email: emailFromToken },
+                    { user_id: userIdFromToken },
+                    { userId: userIdFromToken }
                 ]
             },
-            // Pehle saare attributes nikal ke dekhte hain, kuch bhi filter mat karo
+            // attributes ko abhi touch mat kijiye, saara data aane dijiye
             raw: true 
         });
 
         if (!employee) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Aapka Profile record nahi mila database mein." 
+                message: "Database mein is email se koi employee nahi mila." 
             });
         }
 
-        // --- DEBUGGING LOG ---
-        // Yahan terminal mein check karein ki emp_code dikh raha hai ya nahi
-        console.log("✅ FULL DB RECORD FOUND:", employee);
+        // --- DEBUG LOG ---
+        console.log("✅ FULL DATA FROM DB:", employee);
 
+        // Frontend ko saaf-suthra data bhejna
         return res.status(200).json({
             success: true,
             data: {
                 ...employee,
-                // Agar key ka naam DB mein 'emp_code' ki jagah kuch aur aa gaya ho
-                emp_code: employee.emp_code || employee.empCode || "N/A"
+                // Fallback: Agar emp_code na mile toh hrm_employee_id ka ek part dikha dein
+                emp_code: employee.emp_code || employee.empCode || "EMP-" + employee.id.substring(0,5).toUpperCase()
             }
         });
 
     } catch (error) {
-        console.error("❌ Profile Fetch Error:", error.message);
-        return res.status(500).json({ 
-            success: false, 
-            message: "Internal Server Error" 
-        });
+        console.error("❌ Profile Controller Error:", error.message);
+        return res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 };
-
 module.exports = { CreateEmployee, updateEmployee, getallEmployee, getEmployeeProfile };
