@@ -145,57 +145,56 @@ const getallEmployee = async (req, res) => {
 
 const getEmployeeProfile = async (req, res) => {
     try {
-        // 1. Token se data nikalna
         const userIdFromToken = req.user.id;
         const emailFromToken = req.user.email;
 
-        console.log(`🔍 Searching Profile for - ID: ${userIdFromToken}, Email: ${emailFromToken}`);
-
-        // 2. Database query with fallback
         const employee = await db.EmployeeMaster.findOne({
             where: {
                 [Op.or]: [
-                    { userId: userIdFromToken },
+                    { user_id: userIdFromToken }, // Model mein user_id hai
                     { email: emailFromToken }
                 ]
             },
-            // ⚠️ Attributes ko dhyan se check karein
+            // Sabse safe tarika: attributes mein field names ko array of strings dein
             attributes: [
                 'id', 
-                'emp_code', // Check karein DB mein yahi name hai na?
+                'emp_code', 
                 'name', 
                 'email', 
                 'phone', 
                 'department', 
-                'position'
+                'position',
+                'user_id'
             ],
-            raw: true // 👈 Isse simple JSON milega, Sequelize metadata nahi
+            raw: true 
         });
 
-        // 3. Record validation
         if (!employee) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Aapka Profile record nahi mila." 
+                message: "Profile record nahi mila." 
             });
         }
 
-        // --- DEBUGGING LOG ---
-        console.log("✅ Profile Data Found:", employee);
+        // --- DEBUGGING ---
+        console.log("DB se aaya hua data:", employee);
 
-        // 4. Response bhej dein
         return res.status(200).json({
             success: true,
-            data: employee
+            data: {
+                id: employee.id,
+                emp_code: employee.emp_code, // Ab ye aayega
+                name: employee.name,
+                email: employee.email,
+                phone: employee.phone,
+                department: employee.department,
+                position: employee.position
+            }
         });
 
     } catch (error) {
         console.error("❌ Profile Fetch Error:", error.message);
-        return res.status(500).json({ 
-            success: false, 
-            message: "Internal Server Error",
-            error: error.message 
-        });
+        return res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 };
 
