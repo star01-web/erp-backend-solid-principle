@@ -151,45 +151,33 @@ const getEmployeeProfile = async (req, res) => {
         const employee = await db.EmployeeMaster.findOne({
             where: {
                 [Op.or]: [
-                    { user_id: userIdFromToken }, // Model mein user_id hai
+                    { user_id: userIdFromToken }, // Model mein user_id field hai
                     { email: emailFromToken }
                 ]
             },
-            // Sabse safe tarika: attributes mein field names ko array of strings dein
+            // Attributes ko bina quotes ke check karein ya explicit alias dein
             attributes: [
                 'id', 
-                'emp_code', 
+                'emp_code', // Confirm karein snake_case hi hai
                 'name', 
                 'email', 
                 'phone', 
                 'department', 
-                'position',
-                'user_id'
+                'position'
             ],
             raw: true 
         });
 
         if (!employee) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Profile record nahi mila." 
-            });
+            return res.status(404).json({ success: false, message: "Profile not found." });
         }
 
-        // --- DEBUGGING ---
-        console.log("DB se aaya hua data:", employee);
+        // --- DEBUG: Console mein keys dekhein ---
+        console.log("Keys in DB response:", Object.keys(employee));
 
         return res.status(200).json({
             success: true,
-            data: {
-                id: employee.id,
-                emp_code: employee.emp_code, // Ab ye aayega
-                name: employee.name,
-                email: employee.email,
-                phone: employee.phone,
-                department: employee.department,
-                position: employee.position
-            }
+            data: employee // Yahan 'employee' pura bhej rahe hain
         });
 
     } catch (error) {
