@@ -148,52 +148,47 @@ const getEmployeeProfile = async (req, res) => {
         const userIdFromToken = req.user.id;
         const emailFromToken = req.user.email;
 
-        // Debug ke liye: Token se kya aa raha hai
-        console.log(`Searching for UserID: ${userIdFromToken} or Email: ${emailFromToken}`);
+        console.log(`🔍 Finding Profile for - ID: ${userIdFromToken}, Email: ${emailFromToken}`);
 
+        // Email aur UserID dono se dhoondhein
         const employee = await db.EmployeeMaster.findOne({
             where: {
                 [Op.or]: [
-                    { user_id: userIdFromToken }, 
-                    { email: emailFromToken }
+                    { user_id: userIdFromToken }, // Model field
+                    { userId: userIdFromToken },  // Possible field name check
+                    { email: emailFromToken }     // Email Fallback (Most Reliable)
                 ]
             },
-            // Agar attributes dene par data missing hai, toh temporarily ise hatayein
-            // attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position'],
+            // Pehle saare attributes nikal ke dekhte hain, kuch bhi filter mat karo
             raw: true 
         });
 
         if (!employee) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Profile data not found in EmployeeMaster table." 
+                message: "Aapka Profile record nahi mila database mein." 
             });
         }
 
-        // --- IMPORTANT LOGIC ---
-        // Agar DB mein column name 'emp_code' hai par JSON mein nahi aa raha,
-        // toh manually object assign karein.
-        const responseData = {
-            id: employee.id || employee.employee_master_id,
-            emp_code: employee.emp_code || "NOT_ASSIGNED", // Fallback
-            name: employee.name,
-            email: employee.email,
-            phone: employee.phone,
-            department: employee.department,
-            position: employee.position,
-            hrm_employee_id: employee.id // Aapke console log mein ye aa raha tha
-        };
-
-        console.log("✅ Sending Data to Frontend:", responseData);
+        // --- DEBUGGING LOG ---
+        // Yahan terminal mein check karein ki emp_code dikh raha hai ya nahi
+        console.log("✅ FULL DB RECORD FOUND:", employee);
 
         return res.status(200).json({
             success: true,
-            data: responseData
+            data: {
+                ...employee,
+                // Agar key ka naam DB mein 'emp_code' ki jagah kuch aur aa gaya ho
+                emp_code: employee.emp_code || employee.empCode || "N/A"
+            }
         });
 
     } catch (error) {
-        console.error("❌ Profile Fetch Error:", error);
-        return res.status(500).json({ success: false, message: "Internal Server Error" });
+        console.error("❌ Profile Fetch Error:", error.message);
+        return res.status(500).json({ 
+            success: false, 
+            message: "Internal Server Error" 
+        });
     }
 };
 
