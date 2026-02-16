@@ -56,13 +56,10 @@ const handleCheckIn = async (req, res) => {
 
         const requesterEmpId = requesterProfile.id;
         
-        // --- 2. Determine target employees (FIXED LOGIC) ---
-        // Agar employee_ids array aa raha hai aur length > 0 hai, toh bulk consider karo
         let targetEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0) 
                                 ? employee_ids 
                                 : [requesterEmpId];
 
-        // --- 3. Prevent Duplicate Check-in for Today ---
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
 
@@ -81,15 +78,24 @@ const handleCheckIn = async (req, res) => {
             return res.status(400).json({ message: "Selected employees already checked in today." });
         }
 
-        // --- 4. Geofencing Validation ---
-        // Note: Bulk mein hum supervisor ki location ko hi benchmark maan rahe hain
+        // --- 4. Geofencing Validation with Sales/Driver Bypass ---
         const employeesToPunch = await db.EmployeeMaster.findAll({
             where: { id: { [Op.in]: finalIdsToPunch } },
             include: [{ model: db.OfficeLocation, as: 'location' }]
         });
 
-        // Loop checks if ALL selected employees are within their respective fence
         for (const emp of employeesToPunch) {
+            // Check if Sales or Driver (Lowercase comparison is safer)
+            const position = (emp.position || "").toLowerCase();
+            const isFieldStaff = position.includes('sales') || position.includes('driver');
+
+            // Agar field staff hai, toh geofencing check skip karo
+            if (isFieldStaff) {
+                console.log(`Bypassing geofencing for ${emp.name} (${emp.position})`);
+                continue; 
+            }
+
+            // Normal employees ke liye location check
             if (!emp.location) continue; 
 
             const distance = getDistance(latitude, longitude, emp.location.latitude, emp.location.longitude);
@@ -110,10 +116,9 @@ const handleCheckIn = async (req, res) => {
             latitude,
             longitude,
             address: finalAddress,
-            marked_by: requesterEmpId // Kisne punch kiya (Supervisor ID)
+            marked_by: requesterEmpId
         }));
 
-        // ✅ Yeh line bulk create karegi
         const records = await db.CheckIn.bulkCreate(checkInDataArray);
 
         return res.status(201).json({
@@ -142,8 +147,7 @@ const handleCheckOut = async (req, res) => {
 
         const requesterEmpId = requesterProfile.id;
 
-        // 2. Authorization (Flexible Logic)
-        // Agar employee_ids array hai, toh bulk consider karo, warna single.
+        // 2. Authorization
         let targetEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0) 
                                 ? employee_ids 
                                 : [requesterEmpId];
@@ -154,11 +158,24 @@ const handleCheckOut = async (req, res) => {
                 where: { id: { [Op.in]: targetEmployeeIds } },
                 include: [{ model: db.OfficeLocation, as: 'location' }]
             }),
-            getAddressFromOSM(latitude, longitude) // Address fetch karne ka function
+            getAddressFromOSM(latitude, longitude)
         ]);
 
+        // --- Geofencing Validation with Sales/Driver Bypass ---
         for (const emp of employees) {
+            // Position/Role check
+            const position = (emp.position || "").toLowerCase();
+            const isFieldStaff = position.includes('sales') || position.includes('driver');
+
+            // Agar Sales ya Driver hai toh bypass kar do
+            if (isFieldStaff) {
+                console.log(`Bypassing geofencing for ${emp.name} (Check-out)`);
+                continue; 
+            }
+
+            // Normal employees ke liye check
             if (!emp.location) continue;
+            
             const distance = getDistance(latitude, longitude, emp.location.latitude, emp.location.longitude);
             if (distance > (emp.location.radius || 100)) {
                 return res.status(403).json({ 
@@ -178,7 +195,7 @@ const handleCheckOut = async (req, res) => {
                     employeeId: { [Op.in]: targetEmployeeIds }, 
                     checkInTime: { [Op.gte]: todayStart } 
                 },
-                order: [['checkInTime', 'DESC']] // Latest check-in pehle
+                order: [['checkInTime', 'DESC']]
             }),
             db.CheckOut.findAll({
                 where: { 
@@ -192,9 +209,7 @@ const handleCheckOut = async (req, res) => {
         const checkOutDataArray = [];
         
         targetEmployeeIds.forEach(empId => {
-            // Us employee ka aaj ka latest check-in dhundho
             const lastIn = allCheckIns.find(ci => ci.employeeId === empId);
-            // Check karo ki kya wo aaj pehle hi check-out kar chuka hai
             const alreadyOut = allCheckOuts.find(co => co.employeeId === empId);
 
             if (lastIn && !alreadyOut) {
