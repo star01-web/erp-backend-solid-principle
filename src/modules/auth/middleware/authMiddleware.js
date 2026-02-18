@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const NodeCache = require("node-cache");
 
 // Caching instance create karein (Standard TTL 24 hours rakha hai)
-const myCache = new NodeCache({ stdTTL: 86400, checkperiod: 120 });
+const myCache = new NodeCache({ stdTTL: 0, checkperiod: 0 }); // 0 = Unlimited (Jab tak server restart na ho)
 
 const verifyToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
