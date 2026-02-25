@@ -46,20 +46,18 @@ const getAddressFromOSM = async (lat, lon) => {
 const handleCheckIn = async (req, res) => {
     try {
         const { employee_ids, latitude, longitude } = req.body;
-
         if (!req.user || !req.user.id) return res.status(401).json({ message: "Unauthorized." });
 
         const loggedInUserId = req.user.id; 
         const requesterProfile = await db.EmployeeMaster.findOne({ where: { userId: loggedInUserId } });
-
         if (!requesterProfile) return res.status(404).json({ message: "Profile not found." });
 
         const requesterEmpId = requesterProfile.id;
-        
         let targetEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0) 
                                 ? employee_ids 
                                 : [requesterEmpId];
 
+        // 1. Check if already checked in today
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
 
@@ -78,35 +76,34 @@ const handleCheckIn = async (req, res) => {
             return res.status(400).json({ message: "Selected employees already checked in today." });
         }
 
-        // --- 4. Geofencing Validation with Sales/Driver Bypass ---
+        // --- 2. GEOFENCING LOGIC (Multiple Offices) ---
+        
+        // Saare active offices fetch karein
+        const allOffices = await db.OfficeLocation.findAll(); 
+        
+        // Check karein ki user kisi bhi ek office ke radius mein hai ya nahi
+        const matchedOffice = allOffices.find(office => {
+            const distance = getDistance(latitude, longitude, office.latitude, office.longitude);
+            return distance <= (office.radius || 100);
+        });
+
         const employeesToPunch = await db.EmployeeMaster.findAll({
-            where: { id: { [Op.in]: finalIdsToPunch } },
-            include: [{ model: db.OfficeLocation, as: 'location' }]
+            where: { id: { [Op.in]: finalIdsToPunch } }
         });
 
         for (const emp of employeesToPunch) {
-            // Check if Sales or Driver (Lowercase comparison is safer)
             const position = (emp.position || "").toLowerCase();
             const isFieldStaff = position.includes('sales') || position.includes('driver');
 
-            // Agar field staff hai, toh geofencing check skip karo
-            if (isFieldStaff) {
-                console.log(`Bypassing geofencing for ${emp.name} (${emp.position})`);
-                continue; 
-            }
-
-            // Normal employees ke liye location check
-            if (!emp.location) continue; 
-
-            const distance = getDistance(latitude, longitude, emp.location.latitude, emp.location.longitude);
-            if (distance > (emp.location.radius || 100)) {
+            // Agar office ke bahar hai AUR field staff bhi nahi hai, toh block karein
+            if (!matchedOffice && !isFieldStaff) {
                 return res.status(403).json({ 
-                    message: `${emp.name} location se bahut door hain (${Math.round(distance)}m).` 
+                    message: `${emp.name} kisi bhi office location ke dayre mein nahi hain.` 
                 });
             }
         }
 
-        // --- 5. Processing & Saving ---
+        // --- 3. Processing & Saving ---
         const finalAddress = await getAddressFromOSM(latitude, longitude);
         const now = new Date();
 
@@ -116,7 +113,8 @@ const handleCheckIn = async (req, res) => {
             latitude,
             longitude,
             address: finalAddress,
-            marked_by: requesterEmpId
+            marked_by: requesterEmpId,
+            office_id: matchedOffice ? matchedOffice.id : null // Optional: Track which office
         }));
 
         const records = await db.CheckIn.bulkCreate(checkInDataArray);
@@ -124,6 +122,7 @@ const handleCheckIn = async (req, res) => {
         return res.status(201).json({
             success: true,
             message: `${records.length} logo ka Check-in successfully ho gaya.`,
+            location: matchedOffice ? matchedOffice.name : "Field/On-road",
             address: finalAddress,
             data: records
         });
@@ -146,40 +145,32 @@ const handleCheckOut = async (req, res) => {
         if (!requesterProfile) return res.status(404).json({ message: "Profile not found." });
 
         const requesterEmpId = requesterProfile.id;
-
-        // 2. Authorization
         let targetEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0) 
                                 ? employee_ids 
                                 : [requesterEmpId];
 
-        // 3. Geofencing & Data Fetch (Parallel)
-        const [employees, finalAddress] = await Promise.all([
-            db.EmployeeMaster.findAll({
-                where: { id: { [Op.in]: targetEmployeeIds } },
-                include: [{ model: db.OfficeLocation, as: 'location' }]
-            }),
+        // 2. Fetch Data (Offices, Employees, and Address) in Parallel
+        const [allOffices, employees, finalAddress] = await Promise.all([
+            db.OfficeLocation.findAll(),
+            db.EmployeeMaster.findAll({ where: { id: { [Op.in]: targetEmployeeIds } } }),
             getAddressFromOSM(latitude, longitude)
         ]);
 
-        // --- Geofencing Validation with Sales/Driver Bypass ---
+        // --- 3. GEOFENCING VALIDATION (Multiple Offices) ---
+        // Check if current location matches ANY office
+        const matchedOffice = allOffices.find(office => {
+            const distance = getDistance(latitude, longitude, office.latitude, office.longitude);
+            return distance <= (office.radius || 100);
+        });
+
         for (const emp of employees) {
-            // Position/Role check
             const position = (emp.position || "").toLowerCase();
             const isFieldStaff = position.includes('sales') || position.includes('driver');
 
-            // Agar Sales ya Driver hai toh bypass kar do
-            if (isFieldStaff) {
-                console.log(`Bypassing geofencing for ${emp.name} (Check-out)`);
-                continue; 
-            }
-
-            // Normal employees ke liye check
-            if (!emp.location) continue;
-            
-            const distance = getDistance(latitude, longitude, emp.location.latitude, emp.location.longitude);
-            if (distance > (emp.location.radius || 100)) {
+            // Agar user office ke bahar hai aur field staff bhi nahi hai, toh block karein
+            if (!matchedOffice && !isFieldStaff) {
                 return res.status(403).json({ 
-                    message: `${emp.name} location se door hain (${Math.round(distance)}m).` 
+                    message: `${emp.name} kisi bhi authorized office location ke dayre mein nahi hain (Check-out blocked).` 
                 });
             }
         }
@@ -223,7 +214,8 @@ const handleCheckOut = async (req, res) => {
                     longitude,
                     address: finalAddress,
                     marked_by: requesterEmpId,
-                    working_hours: hoursCalculated
+                    working_hours: hoursCalculated,
+                    office_id: matchedOffice ? matchedOffice.id : null
                 });
             }
         });
@@ -240,6 +232,7 @@ const handleCheckOut = async (req, res) => {
         return res.status(201).json({ 
             success: true, 
             message: `${records.length} logo ka Check-out recorded.`,
+            location: matchedOffice ? matchedOffice.name : "Field/On-road",
             data: records 
         });
 
@@ -383,6 +376,69 @@ const getAttendanceData = async (req, res) => {
     }
 };
 
+const getAllAttendanceData = async (req, res) => {
+    try {
+        // Aggregation Pipeline use karenge dono tables ko join karne ke liye
+        const report = await CheckIn.aggregate([
+            {
+                // 1. CheckOut table ke saath join karein
+                $lookup: {
+                    from: "checkouts", // CheckOut collection ka naam database mein
+                    let: { empId: "$employeeId", checkInDate: "$date" },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$employeeId", "$$empId"] },
+                                        { $eq: ["$date", "$$checkInDate"] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: "checkoutDetails"
+                }
+            },
+            {
+                // 2. Employee details (Name, Code) fetch karein
+                $lookup: {
+                    from: "employees",
+                    localField: "employeeId",
+                    foreignField: "_id",
+                    as: "employeeInfo"
+                }
+            },
+            { $unwind: "$employeeInfo" }, // Array ko object mein convert karein
+            {
+                // 3. Data ko format karein frontend ke liye
+                $project: {
+                    _id: 1,
+                    date: 1,
+                    empName: "$employeeInfo.name",
+                    location: "$location", // Agar CheckIn mein location hai
+                    checkIn: "$time",      // CheckIn ka time
+                    checkOut: { $arrayElemAt: ["$checkoutDetails.time", 0] }, // Pehla checkout time
+                    status: { 
+                        $cond: [{ $gt: [{ $size: "$checkoutDetails" }, 0] }, "Present", "Partial"] 
+                    },
+                    workDone: { $arrayElemAt: ["$checkoutDetails.workDescription", 0] }
+                }
+            },
+            { $sort: { date: -1 } } // Latest records upar
+        ]);
+
+        res.status(200).json({
+            success: true,
+            count: report.length,
+            attendance: report
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 const getFilteredAttendance = async (req, res) => {
     try {
         // Frontend se params lena: ?startDate=2024-01-01&endDate=2024-01-10&employeeId=12
@@ -474,4 +530,6 @@ const getFilteredAttendance = async (req, res) => {
         return res.status(500).json({ success: false, message: "Server Error", error: error.message });
     }
 };
-module.exports = { handleCheckIn, handleCheckOut,getAttendanceData, getTeamMembers, getFilteredAttendance };
+
+
+module.exports = { handleCheckIn, handleCheckOut,getAttendanceData, getTeamMembers, getFilteredAttendance, getAllAttendanceData };

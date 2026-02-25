@@ -134,12 +134,34 @@ const updateEmployee = async (req, res) => {
 const getallEmployee = async (req, res) => {
     try {
         const employees = await db.EmployeeMaster.findAll({
-            attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position']
+            // 1. Employee Table ke fields
+            attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position', 'location', 'monthly_wages'],
+            
+            // 2. User Table ko join karna
+            include: [{
+                model: db.User,
+                as: 'loginDetails', // Jo as aapne belongsTo mein diya hai
+                attributes: ['username', 'role', 'status'] // User table se kya chahiye
+            }],
+            
+            order: [['createdAt', 'DESC']], // Naye employees upar dikhenge
+            nest: true,
+            raw: true 
         });
-        res.json({ employees });
+
+        // 3. Frontend ko response bhejna
+        // Note: Hum 'data' key mein bhej rahe hain taaki frontend handle karna easy ho
+        res.json({ 
+            success: true,
+            employees: employees 
+        });
+
     } catch (error) {
-        console.error("Get All Employees Error:", error);
-        res.status(500).json({ message: "Internal Server Error" });
+        console.error("❌ Get All Employees Error:", error.message);
+        res.status(500).json({ 
+            success: false, 
+            message: "Internal Server Error" 
+        });
     }
 };
 
