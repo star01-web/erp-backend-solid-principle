@@ -55,11 +55,28 @@ const createOfficeLocation = async (req, res) => {
 const getAllLocations = async (req, res) => {
     try {
         const locations = await OfficeLocation.findAll({
-            attributes: ['id', 'locationName'] // Only send what the dropdown needs
+            // Definimos los campos exactos de tu modelo
+            attributes: [
+                'id', 
+                'locationName', 
+                'latitude', 
+                'longitude', 
+                'radiusInMeters'
+            ]
         });
+
+        // Verificamos si hay datos
+        if (locations.length === 0) {
+            return res.status(404).json({ message: "No se encontraron ubicaciones." });
+        }
+
         return res.status(200).json(locations);
     } catch (error) {
-        return res.status(500).json({ message: error.message });
+        console.error("Error al obtener ubicaciones:", error);
+        return res.status(500).json({ 
+            message: "Error interno del servidor", 
+            error: error.message 
+        });
     }
 };
 
