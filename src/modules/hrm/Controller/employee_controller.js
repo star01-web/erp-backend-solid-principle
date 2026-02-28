@@ -79,16 +79,14 @@ const CreateEmployee = async (req, res) => {
 
 
 const updateEmployee = async (req, res) => {
-    // 1. Transaction start karein agar aapne options mein pass kiya hai
     const t = await db.sequelize.transaction();
 
     try {
-        const { id } = req.params;
+        const { id } = req.params; // Ye employee_master_id hai
         
-        // 2. Body se data nikaalein (Destructuring)
         const { 
             name, phone, role, address, 
-            location_id, supervisor_id, 
+            location_id, supervisor_id, // Yahan supervisor_id use ho raha hai
             department, position, monthly_wages, isActive 
         } = req.body;
 
@@ -99,31 +97,37 @@ const updateEmployee = async (req, res) => {
             return res.status(404).json({ message: "Employee nahi mila." });
         }
 
-        // 3. Update execution
+        // 1. Employee Table Update
         await employee.update({
             name,
             phone,
-            role,
             address,
-            location_id: location_id || employee.location_id, // Agar null aaye toh purana rakhein
-            supervisor_id: supervisor_id || employee.supervisor_id,
+            location_id: location_id || employee.location_id,
+            supervisor_id: supervisor_id || employee.supervisor_id, // Updated key
             department,
             position,
             monthly_wages,
             isActive
         }, { transaction: t });
 
-        // 4. Commit transaction
+        // 2. User Table Update (Role ke liye)
+        // Aapke data mein userId login mapping ke liye hai
+        if (role && employee.userId) {
+            await db.User.update(
+                { role: role },
+                { where: { id: employee.userId }, transaction: t }
+            );
+        }
+
         await t.commit();
 
         return res.status(200).json({
             status: "Success",
-            message: "Employee update ho gaya.",
+            message: "Employee data aur Supervisor ID update ho gayi.",
             data: employee
         });
 
     } catch (error) {
-        // 5. Rollback on error
         if (t) await t.rollback();
         console.error("Update Error:", error);
         return res.status(500).json({ message: "Update fail hua.", error: error.message });
@@ -233,4 +237,6 @@ const getEmployeeProfile = async (req, res) => {
         return res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 };
+
+
 module.exports = { CreateEmployee, updateEmployee, getallEmployee, getEmployeeProfile };
