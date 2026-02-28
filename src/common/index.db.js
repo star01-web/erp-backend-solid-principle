@@ -63,11 +63,11 @@ db.EmployeeMaster.belongsTo(db.User, {
 // 5. Self-Referencing (Supervisor to Team Members)
 // Yeh line aapka "Team" render karne mein madad karegi
 db.EmployeeMaster.hasMany(db.EmployeeMaster, {
-    foreignKey: 'reporting_manager_id',
+    foreignKey: 'supervisor_id',
     as: 'teamMembers'
 });
 db.EmployeeMaster.belongsTo(db.EmployeeMaster, {
-    foreignKey: 'reporting_manager_id',
+    foreignKey: 'supervisor_id',
     as: 'supervisor'
 });
 
