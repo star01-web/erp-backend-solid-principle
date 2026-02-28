@@ -157,12 +157,12 @@ const getallEmployee = async (req, res) => {
                 {
                     model: db.OfficeLocation, 
                     as: 'location',      
-                    attributes: ['locationName'] 
+                    attributes: ['id', 'locationName'] 
                 },
                 {
                     model: db.EmployeeMaster, 
                     as: 'supervisor', 
-                    attributes: ['name'] 
+                    attributes: ['employee_master_id', 'name'] 
                 }
             ],
             
