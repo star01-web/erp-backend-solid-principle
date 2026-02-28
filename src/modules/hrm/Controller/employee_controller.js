@@ -134,7 +134,6 @@ const updateEmployee = async (req, res) => {
 const getallEmployee = async (req, res) => {
     try {
         const employees = await db.EmployeeMaster.findAll({
-            // 1. Employee Table ke wahi fields rakhein jo aapke JSON data mein hain
             attributes: [
                 'employee_master_id', 
                 'emp_code', 
@@ -145,31 +144,25 @@ const getallEmployee = async (req, res) => {
                 'position', 
                 'monthly_wages',
                 'location_id',
-                'reporting_manager_id' // Supervisor ke liye ye key use ho rahi hai
+                'reporting_manager_id'
             ],
             
             include: [
-                // 2. User Table Join (Login Details)
                 {
                     model: db.User,
                     as: 'loginDetails', 
-                    attributes: ['username', 'role', 'status']
+                    // Agar 'status' column nahi hai, toh use yahan se hata dein
+                    attributes: ['username', 'role'] 
                 },
-                
-                // 3. OfficeLocation Join (Location Name ke liye)
-                // Association #3: as: 'location'
                 {
                     model: db.OfficeLocation, 
                     as: 'location',      
                     attributes: ['locationName'] 
                 },
-                
-                // 4. Supervisor Join (Self-referencing)
-                // Association #5: as: 'supervisor'
                 {
                     model: db.EmployeeMaster, 
                     as: 'supervisor', 
-                    attributes: ['name'] // Supervisor ka sirf naam fetch karega
+                    attributes: ['name'] 
                 }
             ],
             
@@ -180,7 +173,6 @@ const getallEmployee = async (req, res) => {
 
         res.status(200).json({ 
             success: true,
-            count: employees.length,
             employees: employees 
         });
 
@@ -188,7 +180,8 @@ const getallEmployee = async (req, res) => {
         console.error("❌ Get All Employees Error:", error.message);
         res.status(500).json({ 
             success: false, 
-            message: "Internal Server Error"
+            message: "Internal Server Error",
+            details: error.message // Isse aapko exact missing column ka pata chal jayega
         });
     }
 };
