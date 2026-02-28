@@ -134,7 +134,7 @@ const updateEmployee = async (req, res) => {
 const getallEmployee = async (req, res) => {
     try {
         const employees = await db.EmployeeMaster.findAll({
-            // 1. Employee Table ke correct fields
+            // 1. Employee Table ke wahi fields rakhein jo aapke JSON data mein hain
             attributes: [
                 'employee_master_id', 
                 'emp_code', 
@@ -144,28 +144,32 @@ const getallEmployee = async (req, res) => {
                 'department', 
                 'position', 
                 'monthly_wages',
-                'location_id',   // Column name according to your JSON
-                'supervisor_id'  // Column name according to your JSON
+                'location_id',
+                'reporting_manager_id' // Supervisor ke liye ye key use ho rahi hai
             ],
             
             include: [
-                // 2. User Table Join (Employee Login Details)
+                // 2. User Table Join (Login Details)
                 {
                     model: db.User,
                     as: 'loginDetails', 
                     attributes: ['username', 'role', 'status']
                 },
-                // 3. Location Table Join (Location Name ke liye)
+                
+                // 3. OfficeLocation Join (Location Name ke liye)
+                // Association #3: as: 'location'
                 {
                     model: db.OfficeLocation, 
-                    as: 'officeDetails',      
-                    attributes: ['locationName'] // OfficeLocation table ka column name
+                    as: 'location',      
+                    attributes: ['locationName'] 
                 },
-                // 4. Supervisor Table Join (User table se supervisor ka naam)
+                
+                // 4. Supervisor Join (Self-referencing)
+                // Association #5: as: 'supervisor'
                 {
-                    model: db.User, 
-                    as: 'supervisorDetails', 
-                    attributes: ['name'] // Supervisor ka naam User table se
+                    model: db.EmployeeMaster, 
+                    as: 'supervisor', 
+                    attributes: ['name'] // Supervisor ka sirf naam fetch karega
                 }
             ],
             
@@ -176,6 +180,7 @@ const getallEmployee = async (req, res) => {
 
         res.status(200).json({ 
             success: true,
+            count: employees.length,
             employees: employees 
         });
 
