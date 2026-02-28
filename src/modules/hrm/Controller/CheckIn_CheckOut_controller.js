@@ -268,7 +268,7 @@ const getTeamMembers = async (req, res) => {
         console.error("❌ Team Fetch Error:", error); 
         return res.status(500).json({ success: false, message: "Server Error" });
     }
-}
+};
 
 const getAttendanceData = async (req, res) => {
     try {

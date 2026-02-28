@@ -131,8 +131,45 @@ const updateOfficeLocation = async (req, res) => {
     }
 };
 
+const deleteOfficeLocation = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // 1. Intentar eliminar directamente (Más eficiente)
+        // Opcional: Puedes usar findByPk si necesitas validar algo antes de borrar
+        const deletedRows = await OfficeLocation.destroy({
+            where: { id: id }
+        });
+
+        // 2. Verificar si se eliminó algo
+        if (deletedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "No se encontró la ubicación de la oficina con el ID proporcionado."
+            });
+        }
+
+        // 3. Respuesta de éxito
+        return res.status(200).json({
+            success: true,
+            message: "Ubicación eliminada correctamente.",
+            data: { id }
+        });
+
+    } catch (error) {
+        console.error("Error en deleteOfficeLocation:", error);
+        
+        return res.status(500).json({
+            success: false,
+            message: "Error interno al intentar eliminar la ubicación.",
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createOfficeLocation,
     getAllLocations,
-    updateOfficeLocation
+    updateOfficeLocation,
+    deleteOfficeLocation
 };

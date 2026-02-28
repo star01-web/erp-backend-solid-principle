@@ -134,24 +134,47 @@ const updateEmployee = async (req, res) => {
 const getallEmployee = async (req, res) => {
     try {
         const employees = await db.EmployeeMaster.findAll({
-            // 1. Employee Table ke fields
-            attributes: ['id', 'emp_code', 'name', 'email', 'phone', 'department', 'position', 'location', 'monthly_wages'],
+            // 1. Employee Table ke correct fields
+            attributes: [
+                'employee_master_id', 
+                'emp_code', 
+                'name', 
+                'email', 
+                'phone', 
+                'department', 
+                'position', 
+                'monthly_wages',
+                'location_id',   // Column name according to your JSON
+                'supervisor_id'  // Column name according to your JSON
+            ],
             
-            // 2. User Table ko join karna
-            include: [{
-                model: db.User,
-                as: 'loginDetails', // Jo as aapne belongsTo mein diya hai
-                attributes: ['username', 'role', 'status'] // User table se kya chahiye
-            }],
+            include: [
+                // 2. User Table Join (Employee Login Details)
+                {
+                    model: db.User,
+                    as: 'loginDetails', 
+                    attributes: ['username', 'role', 'status']
+                },
+                // 3. Location Table Join (Location Name ke liye)
+                {
+                    model: db.OfficeLocation, 
+                    as: 'officeDetails',      
+                    attributes: ['locationName'] // OfficeLocation table ka column name
+                },
+                // 4. Supervisor Table Join (User table se supervisor ka naam)
+                {
+                    model: db.User, 
+                    as: 'supervisorDetails', 
+                    attributes: ['name'] // Supervisor ka naam User table se
+                }
+            ],
             
-            order: [['createdAt', 'DESC']], // Naye employees upar dikhenge
+            order: [['createdAt', 'DESC']], 
             nest: true,
             raw: true 
         });
 
-        // 3. Frontend ko response bhejna
-        // Note: Hum 'data' key mein bhej rahe hain taaki frontend handle karna easy ho
-        res.json({ 
+        res.status(200).json({ 
             success: true,
             employees: employees 
         });
@@ -160,7 +183,7 @@ const getallEmployee = async (req, res) => {
         console.error("❌ Get All Employees Error:", error.message);
         res.status(500).json({ 
             success: false, 
-            message: "Internal Server Error" 
+            message: "Internal Server Error"
         });
     }
 };
