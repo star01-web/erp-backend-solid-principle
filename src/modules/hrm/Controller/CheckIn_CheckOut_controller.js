@@ -421,7 +421,7 @@ const getAllAttendanceData = async (req, res) => {
     const targetDate = date || moment().format("YYYY-MM-DD");
 
     // 1. Sabhi employees fetch karein aur unke us date ke CheckIn/CheckOut join karein
-    const reportData = await Employee.findAll({
+    const reportData = await EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
         {
