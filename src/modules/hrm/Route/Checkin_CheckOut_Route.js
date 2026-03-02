@@ -18,8 +18,15 @@ router.post("/checkin", verifyToken, asyncHandler(handleCheckIn));
 router.post("/checkout", verifyToken, asyncHandler(handleCheckOut));
 router.get("/attandace-data", verifyToken, asyncHandler(getAttendanceData));
 router.get("/team-members", verifyToken, asyncHandler(getTeamMembers));
-router.get("/filtered-attendance", verifyToken,asyncHandler(getFilteredAttendance),
+router.get(
+  "/filtered-attendance",
+  verifyToken,
+  asyncHandler(getFilteredAttendance),
 );
-router.get("/full-attendance-report", asyncHandler(getAllAttendanceData));
+router.get(
+  "/full-attendance-report",
+  verifyToken,
+  asyncHandler(getAllAttendanceData),
+);
 
 module.exports = router;

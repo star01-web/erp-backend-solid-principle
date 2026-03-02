@@ -1,7 +1,7 @@
 const db = require("../../../common/index.db");
 const { Op } = require("sequelize");
 const axios = require("axios");
-
+const moment = require("moment");
 // helper function : Distance  checker
 const getDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371e3; // Earth's radius in meters
@@ -417,46 +417,67 @@ const getAttendanceData = async (req, res) => {
 
 const getAllAttendanceData = async (req, res) => {
   try {
-    // SQL Join: CheckIn Table ko CheckOut aur Employee se join karein
-    const report = await CheckIn.findAll({
-      attributes: ["id", "date", "time", "location"],
+    const { date } = req.query; // Kisi specific date ka report (default: today)
+    const targetDate = date || moment().format("YYYY-MM-DD");
+
+    // 1. Sabhi employees fetch karein aur unke us date ke CheckIn/CheckOut join karein
+    const reportData = await Employee.findAll({
+      attributes: ["id", "name", "emp_code"],
       include: [
         {
-          model: CheckOut,
-          required: false, // LEFT JOIN (agar checkout na ho tab bhi checkin dikhe)
-          where: {
-            date: Sequelize.col("CheckIn.date"), // Same date match karein
-          },
-          attributes: ["time", "workDescription"],
+          model: CheckIn,
+          required: false, // LEFT JOIN (Absent dikhane ke liye zaroori)
+          where: { date: targetDate },
         },
         {
-          model: Employee,
-          attributes: ["name", "emp_code"],
-          required: true, // INNER JOIN (employee details must be there)
+          model: CheckOut,
+          required: false, // LEFT JOIN (Short Attendance ke liye)
+          where: { date: targetDate },
         },
       ],
-      order: [
-        ["date", "DESC"],
-        ["time", "DESC"],
-      ],
     });
 
-    // Frontend ke liye data flatten karein
-    const formattedReport = report.map((item) => ({
-      id: item.id,
-      date: item.date,
-      empName: item.Employee?.name,
-      location: item.location,
-      checkIn: item.time,
-      checkOut: item.CheckOut?.time || "---",
-      status: item.CheckOut ? "Present" : "Partial",
-      workDone: item.CheckOut?.workDescription || "No report",
-    }));
+    // 2. Logic processing
+    const finalReport = reportData.map((emp) => {
+      const checkin = emp.CheckIns[0]; // Maan lete hain ek din mein ek hi entry hai
+      const checkout = emp.CheckOuts[0];
 
-    res.status(200).json({
-      success: true,
-      attendance: formattedReport,
+      let status = "Absent";
+      let workingHours = "00:00";
+      let inTime = checkin ? checkin.time : "---";
+      let outTime = checkout ? checkout.time : "---";
+
+      if (checkin && checkout) {
+        status = "Present";
+        // Working Hours Calculation
+        const start = moment(checkin.time, "HH:mm:ss");
+        const end = moment(checkout.time, "HH:mm:ss");
+        const duration = moment.duration(end.diff(start));
+        const hours = Math.floor(duration.asHours());
+        const minutes = duration.minutes();
+        workingHours = `${hours}h ${minutes}m`;
+      } else if (checkin && !checkout) {
+        status = "Short Attendance";
+      }
+
+      return {
+        id: emp.id,
+        empName: emp.name,
+        empCode: emp.emp_code,
+        date: targetDate,
+        checkIn: inTime,
+        checkOut: outTime,
+        status: status,
+        workingHours: workingHours,
+        workDone: checkout
+          ? checkout.workDescription
+          : checkin
+            ? "Pending Checkout"
+            : "N/A",
+      };
     });
+
+    res.status(200).json({ success: true, attendance: finalReport });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
