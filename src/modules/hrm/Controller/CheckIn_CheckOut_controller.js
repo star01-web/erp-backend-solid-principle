@@ -417,42 +417,54 @@ const getAttendanceData = async (req, res) => {
 
 const getAllAttendanceData = async (req, res) => {
   try {
-    const { date } = req.query; // Kisi specific date ka report (default: today)
+    const { date } = req.query;
+    // Target date set karein (Input se ya aaj ki date)
     const targetDate = date || moment().format("YYYY-MM-DD");
 
-    // 1. Sabhi employees fetch karein aur unke us date ke CheckIn/CheckOut join karein
-    const reportData = await EmployeeMaster.findAll({
+    // 1. EmployeeMaster ko db.EmployeeMaster se access karein
+    // LEFT JOIN ke liye 'required: false' use karein taaki Absent wale bhi aayein
+    const reportData = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
         {
-          model: CheckIn,
-          required: false, // LEFT JOIN (Absent dikhane ke liye zaroori)
-          where: { date: targetDate },
+          model: db.CheckIn,
+          // required: false is important for LEFT JOIN
+          required: false,
+          // Note: Sequelize mein date matching check karein (agar column date string hai)
+          where: db.sequelize.where(
+            db.sequelize.fn("DATE", db.sequelize.col("checkInTime")),
+            targetDate,
+          ),
         },
         {
-          model: CheckOut,
-          required: false, // LEFT JOIN (Short Attendance ke liye)
-          where: { date: targetDate },
+          model: db.CheckOut,
+          required: false,
+          where: db.sequelize.where(
+            db.sequelize.fn("DATE", db.sequelize.col("checkOutTime")),
+            targetDate,
+          ),
         },
       ],
     });
 
-    // 2. Logic processing
+    // 2. Logic processing for Frontend
     const finalReport = reportData.map((emp) => {
-      const checkin = emp.CheckIns[0]; // Maan lete hain ek din mein ek hi entry hai
-      const checkout = emp.CheckOuts[0];
+      // Sequelize associations check karein (CheckIns array mein aate hain)
+      const checkin = emp.CheckIns && emp.CheckIns[0];
+      const checkout = emp.CheckOuts && emp.CheckOuts[0];
 
       let status = "Absent";
       let workingHours = "00:00";
-      let inTime = checkin ? checkin.time : "---";
-      let outTime = checkout ? checkout.time : "---";
+
+      // Helper to format time safely
+      const toIST = (time) => (time ? moment(time).format("hh:mm A") : "---");
 
       if (checkin && checkout) {
         status = "Present";
-        // Working Hours Calculation
-        const start = moment(checkin.time, "HH:mm:ss");
-        const end = moment(checkout.time, "HH:mm:ss");
-        const duration = moment.duration(end.diff(start));
+        // Working Hours Calculation (Difference in milliseconds)
+        const duration = moment.duration(
+          moment(checkout.checkOutTime).diff(moment(checkin.checkInTime)),
+        );
         const hours = Math.floor(duration.asHours());
         const minutes = duration.minutes();
         workingHours = `${hours}h ${minutes}m`;
@@ -465,21 +477,22 @@ const getAllAttendanceData = async (req, res) => {
         empName: emp.name,
         empCode: emp.emp_code,
         date: targetDate,
-        checkIn: inTime,
-        checkOut: outTime,
+        checkIn: toIST(checkin?.checkInTime),
+        checkOut: toIST(checkout?.checkOutTime),
         status: status,
         workingHours: workingHours,
         workDone: checkout
-          ? checkout.workDescription
+          ? checkout.address
           : checkin
             ? "Pending Checkout"
             : "N/A",
       };
     });
 
-    res.status(200).json({ success: true, attendance: finalReport });
+    return res.status(200).json({ success: true, attendance: finalReport });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("❌ SQL Fetch Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
