@@ -617,7 +617,7 @@ const getMonthlyPayrollReport = async (req, res) => {
 
     // Fetch employees with checkins & checkouts for month
     const employees = await db.EmployeeMaster.findAll({
-      attributes: ["id", "name", "emp_code", "basicWages"],
+      attributes: ["id", "name", "emp_code", "monthly_wages"],
       include: [
         {
           model: db.CheckIn,
@@ -663,7 +663,7 @@ const getMonthlyPayrollReport = async (req, res) => {
       const present = presentDates.size;
       const absent = workingDays - present;
 
-      const basic = emp.basicWages || 30000;
+      const basic = emp.monthly_wages || 30000;
       const perDay = basic / workingDays;
       const payableAmount = Math.round(present * perDay);
 
@@ -675,7 +675,7 @@ const getMonthlyPayrollReport = async (req, res) => {
         workingDays,
         present,
         absent,
-        basicWages: basic,
+        monthly_wages: basic,
         payableAmount,
       };
     });
@@ -700,5 +700,5 @@ module.exports = {
   getTeamMembers,
   getFilteredAttendance,
   getAllAttendanceData,
-  getMonthlyPayrollReport
+  getMonthlyPayrollReport,
 };

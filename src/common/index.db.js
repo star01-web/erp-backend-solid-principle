@@ -41,7 +41,7 @@ db.CheckOut.belongsTo(db.EmployeeMaster, {
 });
 
 // 3. OfficeLocation to EmployeeMaster (Geofencing ke liye)
-db.OfficeLocation.hasMany(db.EmployeeMaster, { 
+db.OfficeLocation.hasMany(db.EmployeeMaster, {  
     foreignKey: 'location_id', 
     as: 'employees' 
 });
