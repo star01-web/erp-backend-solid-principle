@@ -7,6 +7,7 @@ const {
   getTeamMembers,
   getFilteredAttendance,
   getAllAttendanceData,
+  getMonthlyPayrollReport,
 } = require("../Controller/CheckIn_CheckOut_controller");
 const { verifyToken } = require("../middleware/verifyToken");
 
@@ -27,6 +28,11 @@ router.get(
   "/full-attendance-report",
   verifyToken,
   asyncHandler(getAllAttendanceData),
+);
+router.get(
+  "/monthly-payroll-report",
+  verifyToken,
+  asyncHandler(getMonthlyPayrollReport),
 );
 
 module.exports = router;

@@ -601,6 +601,98 @@ const getFilteredAttendance = async (req, res) => {
   }
 };
 
+const getMonthlyPayrollReport = async (req, res) => {
+  try {
+    const { month } = req.query; // format: 2026-03
+
+    if (!month) {
+      return res.status(400).json({
+        success: false,
+        message: "Month is required (YYYY-MM)",
+      });
+    }
+
+    const startDate = moment(month + "-01").startOf("month");
+    const endDate = moment(startDate).endOf("month");
+
+    // Fetch employees with checkins & checkouts for month
+    const employees = await db.EmployeeMaster.findAll({
+      attributes: ["id", "name", "emp_code", "basicWages"],
+      include: [
+        {
+          model: db.CheckIn,
+          as: "checkins",
+          required: false,
+          where: {
+            checkInTime: {
+              [Op.between]: [startDate.toDate(), endDate.toDate()],
+            },
+          },
+        },
+        {
+          model: db.CheckOut,
+          as: "checkouts",
+          required: false,
+          where: {
+            checkOutTime: {
+              [Op.between]: [startDate.toDate(), endDate.toDate()],
+            },
+          },
+        },
+      ],
+    });
+
+    const totalDays = endDate.date();
+    const weekends = [];
+
+    for (let d = 1; d <= totalDays; d++) {
+      const day = moment(`${month}-${d}`, "YYYY-MM-DD");
+      if (day.day() === 0 || day.day() === 6) {
+        weekends.push(day.format("YYYY-MM-DD"));
+      }
+    }
+
+    const payroll = employees.map((emp) => {
+      const presentDates = new Set();
+
+      emp.checkins.forEach((c) => {
+        presentDates.add(moment(c.checkInTime).format("YYYY-MM-DD"));
+      });
+
+      const workingDays = totalDays - weekends.length;
+      const present = presentDates.size;
+      const absent = workingDays - present;
+
+      const basic = emp.basicWages || 30000;
+      const perDay = basic / workingDays;
+      const payableAmount = Math.round(present * perDay);
+
+      return {
+        empId: emp.id,
+        empCode: emp.emp_code,
+        empName: emp.name,
+        month,
+        workingDays,
+        present,
+        absent,
+        basicWages: basic,
+        payableAmount,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      payroll,
+    });
+  } catch (error) {
+    console.error("Payroll Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   handleCheckIn,
   handleCheckOut,
@@ -608,4 +700,5 @@ module.exports = {
   getTeamMembers,
   getFilteredAttendance,
   getAllAttendanceData,
+  getMonthlyPayrollReport
 };
