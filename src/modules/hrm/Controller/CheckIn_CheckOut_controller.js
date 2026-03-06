@@ -422,21 +422,15 @@ const getAllAttendanceData = async (req, res) => {
     let checkInWhere = {};
     let checkOutWhere = {};
 
-    // ✅ Date filter
+    // ✅ Date filter fix: String format use kar rahe hain taaki timezone shift na ho
     if (startDate && endDate) {
-      checkInWhere.checkInTime = {
-        [Op.between]: [
-          moment(startDate).startOf("day").toDate(),
-          moment(endDate).endOf("day").toDate(),
-        ],
-      };
+      const start = moment(startDate)
+        .startOf("day")
+        .format("YYYY-MM-DD HH:mm:ss");
+      const end = moment(endDate).endOf("day").format("YYYY-MM-DD HH:mm:ss");
 
-      checkOutWhere.checkOutTime = {
-        [Op.between]: [
-          moment(startDate).startOf("day").toDate(),
-          moment(endDate).endOf("day").toDate(),
-        ],
-      };
+      checkInWhere.checkInTime = { [Op.between]: [start, end] };
+      checkOutWhere.checkOutTime = { [Op.between]: [start, end] };
     }
 
     // ✅ Fetch Employees + Attendance
@@ -467,10 +461,10 @@ const getAllAttendanceData = async (req, res) => {
       const checkins = emp.checkins || [];
       const checkouts = emp.checkouts || [];
 
-      // agar checkin nahi hai
+      // Case 1: Agar koi Check-in nahi mila (Absent)
       if (checkins.length === 0) {
         finalReport.push({
-          date: moment().format("YYYY-MM-DD"),
+          date: startDate || moment().format("YYYY-MM-DD"),
           empName: emp.name,
           empCode: emp.emp_code,
           location: "N/A",
@@ -480,62 +474,49 @@ const getAllAttendanceData = async (req, res) => {
           workingHours: "0h 0m",
           workDone: "No Activity",
         });
-      }
+      } else {
+        // Case 2: Check-ins maujood hain
+        checkins.forEach((checkin) => {
+          // Timezone safe comparison using format
+          const checkInDate = moment(checkin.checkInTime).format("YYYY-MM-DD");
 
-      checkins.forEach((checkin) => {
-        // match checkout same date
-        const checkout = checkouts.find((co) =>
-          moment(co.checkOutTime).isSame(checkin.checkInTime, "day"),
-        );
-
-        let status = "Absent";
-        let workingHours = "0h 0m";
-
-        if (checkin && checkout) {
-          status = "Present";
-
-          const duration = moment.duration(
-            moment(checkout.checkOutTime).diff(moment(checkin.checkInTime)),
+          const checkout = checkouts.find(
+            (co) =>
+              moment(co.checkOutTime).format("YYYY-MM-DD") === checkInDate,
           );
 
-          const hours = Math.floor(duration.asHours());
-          const minutes = duration.minutes();
+          let status = "Short Attendance";
+          let workingHours = "0h 0m";
+          let checkOutTimeStr = "---";
+          let workDoneStr = "Pending Checkout";
 
-          workingHours = `${hours}h ${minutes}m`;
-        } else if (checkin && !checkout) {
-          status = "Short Attendance";
-        }
+          if (checkout) {
+            status = "Present";
+            checkOutTimeStr = moment(checkout.checkOutTime).format("hh:mm A");
+            workDoneStr = checkout.address || "N/A";
 
-        finalReport.push({
-          // ✅ DATE
-          date: moment(checkin.checkInTime).format("YYYY-MM-DD"),
+            // Calculation
+            const duration = moment.duration(
+              moment(checkout.checkOutTime).diff(moment(checkin.checkInTime)),
+            );
+            const hours = Math.floor(duration.asHours());
+            const minutes = duration.minutes();
+            workingHours = `${hours}h ${minutes}m`;
+          }
 
-          // ✅ EMPLOYEE
-          empName: emp.name,
-
-          // ✅ EMP CODE
-          empCode: emp.emp_code,
-
-          // ✅ CHECKIN LOCATION
-          location: checkin.address || "N/A",
-
-          // ✅ TIME
-          checkIn: moment(checkin.checkInTime).format("hh:mm A"),
-
-          checkOut: checkout
-            ? moment(checkout.checkOutTime).format("hh:mm A")
-            : "---",
-
-          // ✅ STATUS
-          status,
-
-          // ✅ HOURS
-          workingHours,
-
-          // ✅ CHECKOUT LOCATION
-          workDone: checkout ? checkout.address || "N/A" : "Pending Checkout",
+          finalReport.push({
+            date: checkInDate,
+            empName: emp.name,
+            empCode: emp.emp_code,
+            location: checkin.address || "N/A",
+            checkIn: moment(checkin.checkInTime).format("hh:mm A"),
+            checkOut: checkOutTimeStr,
+            status: status,
+            workingHours: workingHours,
+            workDone: workDoneStr,
+          });
         });
-      });
+      }
     });
 
     res.status(200).json({
@@ -545,7 +526,6 @@ const getAllAttendanceData = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Attendance Error:", error);
-
     res.status(500).json({
       success: false,
       message: error.message,
