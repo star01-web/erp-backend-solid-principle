@@ -417,31 +417,42 @@ const getAttendanceData = async (req, res) => {
 
 const getAllAttendanceData = async (req, res) => {
   try {
-    const { date } = req.query;
+    const { startDate, endDate } = req.query;
 
-    // Target date (default: today)
-    const targetDate = date || moment().format("YYYY-MM-DD");
+    let checkInWhere = {};
+    let checkOutWhere = {};
+
+    // ✅ Agar date range aaya hai to filter lagao
+    if (startDate && endDate) {
+      checkInWhere.checkInTime = {
+        [Op.between]: [
+          moment(startDate).startOf("day").toDate(),
+          moment(endDate).endOf("day").toDate(),
+        ],
+      };
+
+      checkOutWhere.checkOutTime = {
+        [Op.between]: [
+          moment(startDate).startOf("day").toDate(),
+          moment(endDate).endOf("day").toDate(),
+        ],
+      };
+    }
 
     const reportData = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
         {
           model: db.CheckIn,
-          as: "checkins", // ✅ MUST MATCH ASSOCIATION
+          as: "checkins",
           required: false,
-          where: db.sequelize.where(
-            db.sequelize.fn("DATE", db.sequelize.col("checkins.checkInTime")),
-            targetDate,
-          ),
+          where: Object.keys(checkInWhere).length ? checkInWhere : undefined,
         },
         {
           model: db.CheckOut,
-          as: "checkouts", // ✅ MUST MATCH ASSOCIATION
+          as: "checkouts",
           required: false,
-          where: db.sequelize.where(
-            db.sequelize.fn("DATE", db.sequelize.col("checkouts.checkOutTime")),
-            targetDate,
-          ),
+          where: Object.keys(checkOutWhere).length ? checkOutWhere : undefined,
         },
       ],
     });
@@ -475,26 +486,20 @@ const getAllAttendanceData = async (req, res) => {
         id: emp.id,
         empName: emp.name,
         empCode: emp.emp_code,
-        date: targetDate,
         checkIn: formatTime(checkin?.checkInTime),
         checkOut: formatTime(checkout?.checkOutTime),
         status,
         workingHours,
-        workDone: checkout
-          ? checkout.address
-          : checkin
-            ? "Pending Checkout"
-            : "N/A",
       };
     });
 
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
       attendance: finalReport,
     });
   } catch (error) {
-    console.error("❌ SQL Fetch Error:", error);
-    return res.status(500).json({
+    console.error("❌ Attendance Error:", error);
+    res.status(500).json({
       success: false,
       message: error.message,
     });
