@@ -422,7 +422,7 @@ const getAllAttendanceData = async (req, res) => {
     let checkInWhere = {};
     let checkOutWhere = {};
 
-    // ✅ Date range filter
+    // ✅ Date filter
     if (startDate && endDate) {
       checkInWhere.checkInTime = {
         [Op.between]: [
@@ -439,63 +439,59 @@ const getAllAttendanceData = async (req, res) => {
       };
     }
 
+    // ✅ Fetch Employees + Attendance
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
-
       include: [
         {
           model: db.CheckIn,
           as: "checkins",
-          required: false,
           attributes: ["checkInTime", "address"],
-          where:
-            Object.keys(checkInWhere).length > 0 ? checkInWhere : undefined,
+          required: false,
+          where: Object.keys(checkInWhere).length ? checkInWhere : undefined,
         },
         {
           model: db.CheckOut,
           as: "checkouts",
-          required: false,
           attributes: ["checkOutTime", "address"],
-          where:
-            Object.keys(checkOutWhere).length > 0 ? checkOutWhere : undefined,
+          required: false,
+          where: Object.keys(checkOutWhere).length ? checkOutWhere : undefined,
         },
       ],
-
       order: [["name", "ASC"]],
     });
 
-    const attendanceData = [];
+    let finalReport = [];
 
     employees.forEach((emp) => {
       const checkins = emp.checkins || [];
       const checkouts = emp.checkouts || [];
 
-      if (checkins.length === 0 && checkouts.length === 0) {
-        attendanceData.push({
-          id: emp.id,
+      // agar checkin nahi hai
+      if (checkins.length === 0) {
+        finalReport.push({
+          date: moment().format("YYYY-MM-DD"),
           empName: emp.name,
           empCode: emp.emp_code,
+          location: "N/A",
           checkIn: "---",
           checkOut: "---",
           status: "Absent",
-          workingHours: "00:00",
-          workDone: "N/A",
+          workingHours: "0h 0m",
+          workDone: "No Activity",
         });
-
-        return;
       }
 
       checkins.forEach((checkin) => {
-        const checkout = checkouts.find(
-          (co) =>
-            moment(co.checkOutTime).format("YYYY-MM-DD") ===
-            moment(checkin.checkInTime).format("YYYY-MM-DD"),
+        // match checkout same date
+        const checkout = checkouts.find((co) =>
+          moment(co.checkOutTime).isSame(checkin.checkInTime, "day"),
         );
 
-        let status = "Short Attendance";
-        let workingHours = "00:00";
+        let status = "Absent";
+        let workingHours = "0h 0m";
 
-        if (checkout) {
+        if (checkin && checkout) {
           status = "Present";
 
           const duration = moment.duration(
@@ -506,38 +502,51 @@ const getAllAttendanceData = async (req, res) => {
           const minutes = duration.minutes();
 
           workingHours = `${hours}h ${minutes}m`;
+        } else if (checkin && !checkout) {
+          status = "Short Attendance";
         }
 
-        attendanceData.push({
-          id: emp.id,
+        finalReport.push({
+          // ✅ DATE
+          date: moment(checkin.checkInTime).format("YYYY-MM-DD"),
+
+          // ✅ EMPLOYEE
           empName: emp.name,
+
+          // ✅ EMP CODE
           empCode: emp.emp_code,
 
+          // ✅ CHECKIN LOCATION
+          location: checkin.address || "N/A",
+
+          // ✅ TIME
           checkIn: moment(checkin.checkInTime).format("hh:mm A"),
+
           checkOut: checkout
             ? moment(checkout.checkOutTime).format("hh:mm A")
             : "---",
 
+          // ✅ STATUS
           status,
+
+          // ✅ HOURS
           workingHours,
 
-          workDone: checkout
-            ? checkout.address || "Completed"
-            : "Pending Checkout",
+          // ✅ CHECKOUT LOCATION
+          workDone: checkout ? checkout.address || "N/A" : "Pending Checkout",
         });
       });
     });
 
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
-      count: attendanceData.length,
-      attendance: attendanceData,
+      count: finalReport.length,
+      attendance: finalReport,
     });
   } catch (error) {
     console.error("❌ Attendance Error:", error);
-    console.error("❌ SQL:", error.sql);
 
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       message: error.message,
     });
