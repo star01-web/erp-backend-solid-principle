@@ -422,7 +422,7 @@ const getAllAttendanceData = async (req, res) => {
     let checkInWhere = {};
     let checkOutWhere = {};
 
-    // ✅ Agar date range aaya hai to filter lagao
+    // ================= DATE FILTER =================
     if (startDate && endDate) {
       checkInWhere.checkInTime = {
         [Op.between]: [
@@ -439,46 +439,60 @@ const getAllAttendanceData = async (req, res) => {
       };
     }
 
-    const reportData = await db.EmployeeMaster.findAll({
+    // ================= FETCH DATA =================
+    const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
         {
           model: db.CheckIn,
           as: "checkins",
           required: false,
+          attributes: ["checkInTime", "location"],
           where: Object.keys(checkInWhere).length ? checkInWhere : undefined,
+          order: [["checkInTime", "ASC"]],
         },
         {
           model: db.CheckOut,
           as: "checkouts",
           required: false,
+          attributes: ["checkOutTime", "address"],
           where: Object.keys(checkOutWhere).length ? checkOutWhere : undefined,
+          order: [["checkOutTime", "DESC"]],
         },
       ],
     });
 
-    const finalReport = reportData.map((emp) => {
-      const checkin = emp.checkins?.[0] || null;
-      const checkout = emp.checkouts?.[0] || null;
+    // ================= FORMAT TIME =================
+    const formatTime = (time) => {
+      if (!time) return "---";
+      return moment.utc(time).tz("Asia/Kolkata").format("hh:mm A");
+    };
+
+    // ================= FINAL REPORT =================
+    const finalReport = employees.map((emp) => {
+      const firstCheckIn = emp.checkins?.length ? emp.checkins[0] : null;
+
+      const lastCheckOut = emp.checkouts?.length
+        ? emp.checkouts[emp.checkouts.length - 1]
+        : null;
 
       let status = "Absent";
-      let workingHours = "00:00";
+      let workingHours = "00h 00m";
 
-      const formatTime = (time) =>
-        time ? moment(time).format("hh:mm A") : "---";
-
-      if (checkin && checkout) {
+      if (firstCheckIn && lastCheckOut) {
         status = "Present";
 
         const duration = moment.duration(
-          moment(checkout.checkOutTime).diff(moment(checkin.checkInTime)),
+          moment(lastCheckOut.checkOutTime).diff(
+            moment(firstCheckIn.checkInTime),
+          ),
         );
 
         const hours = Math.floor(duration.asHours());
         const minutes = duration.minutes();
 
         workingHours = `${hours}h ${minutes}m`;
-      } else if (checkin && !checkout) {
+      } else if (firstCheckIn && !lastCheckOut) {
         status = "Short Attendance";
       }
 
@@ -486,19 +500,32 @@ const getAllAttendanceData = async (req, res) => {
         id: emp.id,
         empName: emp.name,
         empCode: emp.emp_code,
-        checkIn: formatTime(checkin?.checkInTime),
-        checkOut: formatTime(checkout?.checkOutTime),
+
+        location: firstCheckIn?.location || "N/A",
+
+        checkIn: formatTime(firstCheckIn?.checkInTime),
+        checkOut: formatTime(lastCheckOut?.checkOutTime),
+
         status,
         workingHours,
+
+        workDone: lastCheckOut
+          ? lastCheckOut.address
+          : firstCheckIn
+            ? "Pending Checkout"
+            : "N/A",
       };
     });
 
+    // ================= RESPONSE =================
     res.status(200).json({
       success: true,
+      totalEmployees: finalReport.length,
       attendance: finalReport,
     });
   } catch (error) {
     console.error("❌ Attendance Error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message,
