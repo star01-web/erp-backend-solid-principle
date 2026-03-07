@@ -15,7 +15,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
         .json({ success: false, message: "Date range is required" });
     }
 
-    // 1. ✅ Path Configuration (Linux & Windows Friendly)
+    // 1. ✅ Template Path Setup
     const templatePath = path.join(
       process.cwd(),
       "src",
@@ -36,15 +36,20 @@ const exportAttendanceWithTemplate = async (req, res) => {
     await workbook.xlsx.readFile(templatePath);
     const worksheet = workbook.getWorksheet(1);
 
-    // 2. ✅ Header & Month Calculation
-    const monthName = moment(startDate).format("MMMM YYYY");
-    const dateRangeStr = `${moment(startDate).format("DD-MM-YYYY")} to ${moment(endDate).format("DD-MM-YYYY")}`;
+    // 2. ✅ Dynamic Header (A1 mein Month Name)
+    const startMom = moment(startDate);
+    const endMom = moment(endDate);
+    const monthName = startMom.format("MMMM YYYY");
 
-    worksheet.getCell("A1").value = `Attendance Report of ${monthName}`;
+    const titleCell = worksheet.getCell("A1");
+    titleCell.value = `Attendance Report of ${monthName}`;
+
     const rangeCell = worksheet.getCell("A2");
-    if (rangeCell) rangeCell.value = `Period: ${dateRangeStr}`;
+    if (rangeCell) {
+      rangeCell.value = `Period: ${startMom.format("DD-MM-YYYY")} to ${endMom.format("DD-MM-YYYY")}`;
+    }
 
-    // 3. ✅ Data Fetching
+    // 3. ✅ Fetch Data from Database
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
@@ -55,8 +60,8 @@ const exportAttendanceWithTemplate = async (req, res) => {
           where: {
             checkInTime: {
               [Op.between]: [
-                moment(startDate).startOf("day").toDate(),
-                moment(endDate).endOf("day").toDate(),
+                startMom.startOf("day").toDate(),
+                endMom.endOf("day").toDate(),
               ],
             },
           },
@@ -68,8 +73,8 @@ const exportAttendanceWithTemplate = async (req, res) => {
           where: {
             checkOutTime: {
               [Op.between]: [
-                moment(startDate).startOf("day").toDate(),
-                moment(endDate).endOf("day").toDate(),
+                startMom.startOf("day").toDate(),
+                endMom.endOf("day").toDate(),
               ],
             },
           },
@@ -78,67 +83,58 @@ const exportAttendanceWithTemplate = async (req, res) => {
       order: [["name", "ASC"]],
     });
 
-    // 4. ✅ Main Loop for Rows & Calculations
+    // 4. ✅ Data Filling Logic (Row 4 onwards)
     let currentRow = 4;
 
     employees.forEach((emp) => {
       const row = worksheet.getRow(currentRow);
-      row.getCell(1).value = emp.name;
-      row.getCell(2).value = emp.emp_code;
 
-      let counters = {
-        workingDays: 0,
-        present: 0,
-        shortAttendance: 0,
-        absent: 0,
-      };
+      // Basic Info
+      row.getCell(1).value = emp.name; // Column A
+      row.getCell(2).value = emp.emp_code; // Column B
 
-      let datePointer = moment(startDate);
-      const end = moment(endDate);
-      let colIndex = 3; // Column C se Dates (In/Out) shuru
+      let counters = { working: 0, present: 0, short: 0, absent: 0 };
+      let datePtr = moment(startDate);
+      let colIdx = 3; // Column C se Dates shuru
 
-      while (datePointer <= end) {
-        counters.workingDays++;
-        const dateStr = datePointer.format("YYYY-MM-DD");
+      while (datePtr <= endMom) {
+        counters.working++;
+        const dStr = datePtr.format("YYYY-MM-DD");
 
         const cin = emp.checkins.find(
-          (c) => moment(c.checkInTime).format("YYYY-MM-DD") === dateStr,
+          (c) => moment(c.checkInTime).format("YYYY-MM-DD") === dStr,
         );
         const cout = emp.checkouts.find(
-          (c) => moment(c.checkOutTime).format("YYYY-MM-DD") === dateStr,
+          (c) => moment(c.checkOutTime).format("YYYY-MM-DD") === dStr,
         );
 
-        // Data Fill
-        row.getCell(colIndex).value = cin
+        // Fill In/Out
+        row.getCell(colIdx).value = cin
           ? moment(cin.checkInTime).format("hh:mm A")
           : "---";
-        row.getCell(colIndex + 1).value = cout
+        row.getCell(colIdx + 1).value = cout
           ? moment(cout.checkOutTime).format("hh:mm A")
           : "---";
 
-        // Calculation Logic
+        // Logic for Calculations
         if (cin) {
-          if (cin.status === "Present") {
-            counters.present++;
-          } else if (cin.status === "Short Attendance") {
-            counters.shortAttendance++;
-          }
+          if (cin.status === "Present") counters.present++;
+          else if (cin.status === "Short Attendance") counters.short++;
         } else {
           counters.absent++;
         }
 
-        datePointer.add(1, "days");
-        colIndex += 2;
+        datePtr.add(1, "days");
+        colIdx += 2; // Jump 2 columns for next date
       }
 
-      // 5. ✅ Summary Columns (Jo aapne image mein dikhayi hain)
-      row.getCell(colIndex).value = counters.workingDays; // Total Working Days
-      row.getCell(colIndex + 1).value =
-        counters.present + counters.shortAttendance; // Total Present Days
-      row.getCell(colIndex + 2).value = counters.absent; // Total Absent Days
-      row.getCell(colIndex + 3).value = counters.shortAttendance; // Total Short Attendance Days
+      // 5. ✅ Summary Columns (As per your uploaded image)
+      row.getCell(colIdx).value = counters.working; // Total Working Days
+      row.getCell(colIdx + 1).value = counters.present + counters.short; // Total Present
+      row.getCell(colIdx + 2).value = counters.absent; // Total Absent
+      row.getCell(colIdx + 3).value = counters.short; // Total Short Attendance
 
-      // Formatting & Borders
+      // Apply Borders & Center Align
       row.eachCell({ includeEmpty: true }, (cell) => {
         cell.border = {
           top: { style: "thin" },
@@ -152,18 +148,21 @@ const exportAttendanceWithTemplate = async (req, res) => {
       currentRow++;
     });
 
-    // 6. ✅ Response Setup
-    const fileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
+    // 6. ✅ Final Response Delivery
+    const finalFileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
-    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=${finalFileName}`,
+    );
 
     await workbook.xlsx.write(res);
-    res.end();
+    res.status(200).end();
   } catch (error) {
-    console.error("❌ Critical Export Error:", error);
+    console.error("❌ Export Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
