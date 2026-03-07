@@ -1,6 +1,5 @@
 const ExcelJS = require("exceljs");
 const path = require("path");
-const fs = require("fs");
 const moment = require("moment");
 const { Op } = require("sequelize");
 const db = require("../../../common/index.db");
@@ -15,8 +14,8 @@ const exportAttendanceWithTemplate = async (req, res) => {
         .json({ success: false, message: "Date range is required" });
     }
 
-    // 1. ✅ Absolute Path Calculation (Server-friendly)
-    // process.cwd() project ke root (nodejs/) tak ka path nikalta hai
+    // 1. ✅ Absolute Path Fix (Linux Server Friendly)
+    // process.cwd() project root (nodejs/) se path uthayega
     const templatePath = path.join(
       process.cwd(),
       "src",
@@ -26,34 +25,33 @@ const exportAttendanceWithTemplate = async (req, res) => {
       "attendance_template.xlsx",
     );
 
-    // 2. ✅ Check karein ki file wahan hai ya nahi
-    if (!fs.existsSync(templatePath)) {
-      console.error("❌ Template file not found at:", templatePath);
+    const workbook = new ExcelJS.Workbook();
+
+    // Check karein ki template exist karta hai ya nahi
+    try {
+      await workbook.xlsx.readFile(templatePath);
+    } catch (readError) {
+      console.error("🔍 Template not found at:", templatePath);
       return res.status(500).json({
         success: false,
-        message: "Server par template file nahi mili. Path check karein.",
-        debugPath: templatePath,
+        message: "Template file missing at " + templatePath,
       });
     }
 
-    // 3. ✅ ExcelJS Workbook Load Karein
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(templatePath);
     const worksheet = workbook.getWorksheet(1);
 
-    // 4. ✅ Dynamic Heading Logic
+    // 2. ✅ Dynamic Month & Range Heading
     const monthName = moment(startDate).format("MMMM YYYY");
     const dateRangeStr = `${moment(startDate).format("DD-MM-YYYY")} to ${moment(endDate).format("DD-MM-YYYY")}`;
 
-    // A1 Cell: Heading
+    // A1 aur A2 cells ko update karna
     const titleCell = worksheet.getCell("A1");
     titleCell.value = `Attendance Report of ${monthName}`;
 
-    // A2 Cell: Date Range (Optional)
     const rangeCell = worksheet.getCell("A2");
     if (rangeCell) rangeCell.value = `Period: ${dateRangeStr}`;
 
-    // 5. ✅ Database Data Fetching
+    // 3. ✅ Data Fetching (With Token-based filtering if needed)
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
@@ -87,7 +85,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
       order: [["name", "ASC"]],
     });
 
-    // 6. ✅ Data Filling Logic (Row 4 se)
+    // 4. ✅ Data Filling Logic (Row 4 se shuru)
     let currentRow = 4;
 
     employees.forEach((emp) => {
@@ -109,7 +107,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
           (c) => moment(c.checkOutTime).format("YYYY-MM-DD") === dateStr,
         );
 
-        // Data Insertion
+        // In/Out Values
         row.getCell(colIndex).value = cin
           ? moment(cin.checkInTime).format("hh:mm A")
           : "---";
@@ -117,7 +115,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
           ? moment(cout.checkOutTime).format("hh:mm A")
           : "---";
 
-        // Style Settings
+        // Alignment
         row.getCell(colIndex).alignment = {
           horizontal: "center",
           vertical: "middle",
@@ -131,7 +129,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
         colIndex += 2;
       }
 
-      // Border set karna
+      // 5. ✅ Borders Apply Karna (Template design preserve rahega)
       row.eachCell({ includeEmpty: true }, (cell) => {
         cell.border = {
           top: { style: "thin" },
@@ -144,27 +142,20 @@ const exportAttendanceWithTemplate = async (req, res) => {
       currentRow++;
     });
 
-    // 7. ✅ Final Response Delivery
-    const finalFileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
+    // 6. ✅ Final Response Settings
+    const fileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
 
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=${finalFileName}`,
-    );
+    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
 
     await workbook.xlsx.write(res);
-    res.status(200).end();
+    res.end();
   } catch (error) {
-    console.error("❌ Export Critical Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server side error during excel generation",
-      error: error.message,
-    });
+    console.error("❌ Critical Export Error:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
