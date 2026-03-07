@@ -1,5 +1,6 @@
 const ExcelJS = require("exceljs");
 const path = require("path");
+const fs = require("fs");
 const moment = require("moment");
 const { Op } = require("sequelize");
 const db = require("../../../common/index.db");
@@ -14,8 +15,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
         .json({ success: false, message: "Date range is required" });
     }
 
-    // 1. ✅ Absolute Path Fix (Linux Server Friendly)
-    // process.cwd() project root (nodejs/) se path uthayega
+    // 1. ✅ Path Configuration (Linux & Windows Friendly)
     const templatePath = path.join(
       process.cwd(),
       "src",
@@ -25,33 +25,26 @@ const exportAttendanceWithTemplate = async (req, res) => {
       "attendance_template.xlsx",
     );
 
-    const workbook = new ExcelJS.Workbook();
-
-    // Check karein ki template exist karta hai ya nahi
-    try {
-      await workbook.xlsx.readFile(templatePath);
-    } catch (readError) {
-      console.error("🔍 Template not found at:", templatePath);
+    if (!fs.existsSync(templatePath)) {
       return res.status(500).json({
         success: false,
         message: "Template file missing at " + templatePath,
       });
     }
 
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(templatePath);
     const worksheet = workbook.getWorksheet(1);
 
-    // 2. ✅ Dynamic Month & Range Heading
+    // 2. ✅ Header & Month Calculation
     const monthName = moment(startDate).format("MMMM YYYY");
     const dateRangeStr = `${moment(startDate).format("DD-MM-YYYY")} to ${moment(endDate).format("DD-MM-YYYY")}`;
 
-    // A1 aur A2 cells ko update karna
-    const titleCell = worksheet.getCell("A1");
-    titleCell.value = `Attendance Report of ${monthName}`;
-
+    worksheet.getCell("A1").value = `Attendance Report of ${monthName}`;
     const rangeCell = worksheet.getCell("A2");
     if (rangeCell) rangeCell.value = `Period: ${dateRangeStr}`;
 
-    // 3. ✅ Data Fetching (With Token-based filtering if needed)
+    // 3. ✅ Data Fetching
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
@@ -85,7 +78,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
       order: [["name", "ASC"]],
     });
 
-    // 4. ✅ Data Filling Logic (Row 4 se shuru)
+    // 4. ✅ Main Loop for Rows & Calculations
     let currentRow = 4;
 
     employees.forEach((emp) => {
@@ -93,11 +86,19 @@ const exportAttendanceWithTemplate = async (req, res) => {
       row.getCell(1).value = emp.name;
       row.getCell(2).value = emp.emp_code;
 
+      let counters = {
+        workingDays: 0,
+        present: 0,
+        shortAttendance: 0,
+        absent: 0,
+      };
+
       let datePointer = moment(startDate);
       const end = moment(endDate);
-      let colIndex = 3; // Column C se Dates shuru
+      let colIndex = 3; // Column C se Dates (In/Out) shuru
 
       while (datePointer <= end) {
+        counters.workingDays++;
         const dateStr = datePointer.format("YYYY-MM-DD");
 
         const cin = emp.checkins.find(
@@ -107,7 +108,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
           (c) => moment(c.checkOutTime).format("YYYY-MM-DD") === dateStr,
         );
 
-        // In/Out Values
+        // Data Fill
         row.getCell(colIndex).value = cin
           ? moment(cin.checkInTime).format("hh:mm A")
           : "---";
@@ -115,21 +116,29 @@ const exportAttendanceWithTemplate = async (req, res) => {
           ? moment(cout.checkOutTime).format("hh:mm A")
           : "---";
 
-        // Alignment
-        row.getCell(colIndex).alignment = {
-          horizontal: "center",
-          vertical: "middle",
-        };
-        row.getCell(colIndex + 1).alignment = {
-          horizontal: "center",
-          vertical: "middle",
-        };
+        // Calculation Logic
+        if (cin) {
+          if (cin.status === "Present") {
+            counters.present++;
+          } else if (cin.status === "Short Attendance") {
+            counters.shortAttendance++;
+          }
+        } else {
+          counters.absent++;
+        }
 
         datePointer.add(1, "days");
         colIndex += 2;
       }
 
-      // 5. ✅ Borders Apply Karna (Template design preserve rahega)
+      // 5. ✅ Summary Columns (Jo aapne image mein dikhayi hain)
+      row.getCell(colIndex).value = counters.workingDays; // Total Working Days
+      row.getCell(colIndex + 1).value =
+        counters.present + counters.shortAttendance; // Total Present Days
+      row.getCell(colIndex + 2).value = counters.absent; // Total Absent Days
+      row.getCell(colIndex + 3).value = counters.shortAttendance; // Total Short Attendance Days
+
+      // Formatting & Borders
       row.eachCell({ includeEmpty: true }, (cell) => {
         cell.border = {
           top: { style: "thin" },
@@ -137,14 +146,14 @@ const exportAttendanceWithTemplate = async (req, res) => {
           bottom: { style: "thin" },
           right: { style: "thin" },
         };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
       });
 
       currentRow++;
     });
 
-    // 6. ✅ Final Response Settings
+    // 6. ✅ Response Setup
     const fileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
-
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
