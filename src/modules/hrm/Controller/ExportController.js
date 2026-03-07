@@ -2,7 +2,7 @@ const ExcelJS = require("exceljs");
 const path = require("path");
 const moment = require("moment");
 const { Op } = require("sequelize");
-const db = require("../../../common/index.db"); // Aapka db path
+const db = require("../../../common/index.db"); // Apne models ka sahi path confirm karein
 
 const exportAttendanceWithTemplate = async (req, res) => {
   try {
@@ -14,30 +14,44 @@ const exportAttendanceWithTemplate = async (req, res) => {
         .json({ success: false, message: "Date range is required" });
     }
 
-    // 1. Template File ka Path
+    // 1. ✅ Absolute Path Fix (Linux Server Friendly)
+    // process.cwd() project root (nodejs/) se path uthayega
     const templatePath = path.join(
-      __dirname,
-      "../templates/attendance_template.xlsx",
+      process.cwd(),
+      "src",
+      "modules",
+      "hrm",
+      "templates",
+      "attendance_template.xlsx",
     );
 
-    // 2. ExcelJS Workbook Load Karein
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(templatePath);
+
+    // Check karein ki template exist karta hai ya nahi
+    try {
+      await workbook.xlsx.readFile(templatePath);
+    } catch (readError) {
+      console.error("🔍 Template not found at:", templatePath);
+      return res.status(500).json({
+        success: false,
+        message: "Template file missing at " + templatePath,
+      });
+    }
+
     const worksheet = workbook.getWorksheet(1);
 
-    // 3. Dynamic Heading Set Karein (Month Name)
+    // 2. ✅ Dynamic Month & Range Heading
     const monthName = moment(startDate).format("MMMM YYYY");
     const dateRangeStr = `${moment(startDate).format("DD-MM-YYYY")} to ${moment(endDate).format("DD-MM-YYYY")}`;
 
-    // Maan lijiye A1 mein aapka main title hai
+    // A1 aur A2 cells ko update karna
     const titleCell = worksheet.getCell("A1");
     titleCell.value = `Attendance Report of ${monthName}`;
 
-    // Maan lijiye A2 mein aap date range dikhana chahte hain
     const rangeCell = worksheet.getCell("A2");
     if (rangeCell) rangeCell.value = `Period: ${dateRangeStr}`;
 
-    // 4. Database se Data Fetch Karein
+    // 3. ✅ Data Fetching (With Token-based filtering if needed)
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
@@ -48,8 +62,8 @@ const exportAttendanceWithTemplate = async (req, res) => {
           where: {
             checkInTime: {
               [Op.between]: [
-                moment(startDate).startOf("day").format("YYYY-MM-DD HH:mm:ss"),
-                moment(endDate).endOf("day").format("YYYY-MM-DD HH:mm:ss"),
+                moment(startDate).startOf("day").toDate(),
+                moment(endDate).endOf("day").toDate(),
               ],
             },
           },
@@ -61,8 +75,8 @@ const exportAttendanceWithTemplate = async (req, res) => {
           where: {
             checkOutTime: {
               [Op.between]: [
-                moment(startDate).startOf("day").format("YYYY-MM-DD HH:mm:ss"),
-                moment(endDate).endOf("day").format("YYYY-MM-DD HH:mm:ss"),
+                moment(startDate).startOf("day").toDate(),
+                moment(endDate).endOf("day").toDate(),
               ],
             },
           },
@@ -71,24 +85,21 @@ const exportAttendanceWithTemplate = async (req, res) => {
       order: [["name", "ASC"]],
     });
 
-    // 5. Data Fill Karne ka Logic (Row 4 se shuru)
+    // 4. ✅ Data Filling Logic (Row 4 se shuru)
     let currentRow = 4;
 
     employees.forEach((emp) => {
       const row = worksheet.getRow(currentRow);
-
-      // Column A: Employee Name, Column B: Emp Code (Template ke hisab se adjust karein)
       row.getCell(1).value = emp.name;
       row.getCell(2).value = emp.emp_code;
 
       let datePointer = moment(startDate);
       const end = moment(endDate);
-      let colIndex = 3; // Agar Column C se Dates shuru ho rahi hain
+      let colIndex = 3; // Column C se Dates shuru
 
       while (datePointer <= end) {
         const dateStr = datePointer.format("YYYY-MM-DD");
 
-        // Check-in/Out match karein
         const cin = emp.checkins.find(
           (c) => moment(c.checkInTime).format("YYYY-MM-DD") === dateStr,
         );
@@ -96,7 +107,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
           (c) => moment(c.checkOutTime).format("YYYY-MM-DD") === dateStr,
         );
 
-        // Cells mein data bharein
+        // In/Out Values
         row.getCell(colIndex).value = cin
           ? moment(cin.checkInTime).format("hh:mm A")
           : "---";
@@ -104,15 +115,21 @@ const exportAttendanceWithTemplate = async (req, res) => {
           ? moment(cout.checkOutTime).format("hh:mm A")
           : "---";
 
-        // Styling (Optional: Text align center)
-        row.getCell(colIndex).alignment = { horizontal: "center" };
-        row.getCell(colIndex + 1).alignment = { horizontal: "center" };
+        // Alignment
+        row.getCell(colIndex).alignment = {
+          horizontal: "center",
+          vertical: "middle",
+        };
+        row.getCell(colIndex + 1).alignment = {
+          horizontal: "center",
+          vertical: "middle",
+        };
 
         datePointer.add(1, "days");
-        colIndex += 2; // Next date ke liye 2 columns aage (In/Out)
+        colIndex += 2;
       }
 
-      // Har row ke baad borders add karein (Template design maintain rakhne ke liye)
+      // 5. ✅ Borders Apply Karna (Template design preserve rahega)
       row.eachCell({ includeEmpty: true }, (cell) => {
         cell.border = {
           top: { style: "thin" },
@@ -122,29 +139,23 @@ const exportAttendanceWithTemplate = async (req, res) => {
         };
       });
 
-      row.commit();
       currentRow++;
     });
 
-    // 6. Response Headers aur Download
+    // 6. ✅ Final Response Settings
+    const fileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
+
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=Attendance_${monthName.replace(" ", "_")}.xlsx`,
-    );
+    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
 
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
-    console.error("❌ Export Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error during export",
-      error: error.message,
-    });
+    console.error("❌ Critical Export Error:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
