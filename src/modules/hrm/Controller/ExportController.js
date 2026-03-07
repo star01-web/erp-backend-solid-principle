@@ -1,8 +1,9 @@
 const ExcelJS = require("exceljs");
 const path = require("path");
+const fs = require("fs");
 const moment = require("moment");
 const { Op } = require("sequelize");
-const db = require("../../../common/index.db"); // Apne models ka sahi path confirm karein
+const db = require("../../../common/index.db");
 
 const exportAttendanceWithTemplate = async (req, res) => {
   try {
@@ -14,8 +15,8 @@ const exportAttendanceWithTemplate = async (req, res) => {
         .json({ success: false, message: "Date range is required" });
     }
 
-    // 1. ✅ Absolute Path Fix (Linux Server Friendly)
-    // process.cwd() project root (nodejs/) se path uthayega
+    // 1. ✅ Absolute Path Calculation (Server-friendly)
+    // process.cwd() project ke root (nodejs/) tak ka path nikalta hai
     const templatePath = path.join(
       process.cwd(),
       "src",
@@ -25,33 +26,34 @@ const exportAttendanceWithTemplate = async (req, res) => {
       "attendance_template.xlsx",
     );
 
-    const workbook = new ExcelJS.Workbook();
-
-    // Check karein ki template exist karta hai ya nahi
-    try {
-      await workbook.xlsx.readFile(templatePath);
-    } catch (readError) {
-      console.error("🔍 Template not found at:", templatePath);
+    // 2. ✅ Check karein ki file wahan hai ya nahi
+    if (!fs.existsSync(templatePath)) {
+      console.error("❌ Template file not found at:", templatePath);
       return res.status(500).json({
         success: false,
-        message: "Template file missing at " + templatePath,
+        message: "Server par template file nahi mili. Path check karein.",
+        debugPath: templatePath,
       });
     }
 
+    // 3. ✅ ExcelJS Workbook Load Karein
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(templatePath);
     const worksheet = workbook.getWorksheet(1);
 
-    // 2. ✅ Dynamic Month & Range Heading
+    // 4. ✅ Dynamic Heading Logic
     const monthName = moment(startDate).format("MMMM YYYY");
     const dateRangeStr = `${moment(startDate).format("DD-MM-YYYY")} to ${moment(endDate).format("DD-MM-YYYY")}`;
 
-    // A1 aur A2 cells ko update karna
+    // A1 Cell: Heading
     const titleCell = worksheet.getCell("A1");
     titleCell.value = `Attendance Report of ${monthName}`;
 
+    // A2 Cell: Date Range (Optional)
     const rangeCell = worksheet.getCell("A2");
     if (rangeCell) rangeCell.value = `Period: ${dateRangeStr}`;
 
-    // 3. ✅ Data Fetching (With Token-based filtering if needed)
+    // 5. ✅ Database Data Fetching
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
@@ -85,7 +87,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
       order: [["name", "ASC"]],
     });
 
-    // 4. ✅ Data Filling Logic (Row 4 se shuru)
+    // 6. ✅ Data Filling Logic (Row 4 se)
     let currentRow = 4;
 
     employees.forEach((emp) => {
@@ -107,7 +109,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
           (c) => moment(c.checkOutTime).format("YYYY-MM-DD") === dateStr,
         );
 
-        // In/Out Values
+        // Data Insertion
         row.getCell(colIndex).value = cin
           ? moment(cin.checkInTime).format("hh:mm A")
           : "---";
@@ -115,7 +117,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
           ? moment(cout.checkOutTime).format("hh:mm A")
           : "---";
 
-        // Alignment
+        // Style Settings
         row.getCell(colIndex).alignment = {
           horizontal: "center",
           vertical: "middle",
@@ -129,7 +131,7 @@ const exportAttendanceWithTemplate = async (req, res) => {
         colIndex += 2;
       }
 
-      // 5. ✅ Borders Apply Karna (Template design preserve rahega)
+      // Border set karna
       row.eachCell({ includeEmpty: true }, (cell) => {
         cell.border = {
           top: { style: "thin" },
@@ -142,20 +144,27 @@ const exportAttendanceWithTemplate = async (req, res) => {
       currentRow++;
     });
 
-    // 6. ✅ Final Response Settings
-    const fileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
+    // 7. ✅ Final Response Delivery
+    const finalFileName = `Attendance_${monthName.replace(/\s/g, "_")}.xlsx`;
 
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
-    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=${finalFileName}`,
+    );
 
     await workbook.xlsx.write(res);
-    res.end();
+    res.status(200).end();
   } catch (error) {
-    console.error("❌ Critical Export Error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error("❌ Export Critical Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server side error during excel generation",
+      error: error.message,
+    });
   }
 };
 
