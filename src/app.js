@@ -9,6 +9,7 @@ const CreateOfficeLocation = require("./modules/hrm/Route/Office_Location_Route"
 const attendaceRow = require("./modules/hrm/Route/Checkin_CheckOut_Route");
 const internalAuth = require("./modules/auth/middleware/api.internalAuth");
 const exportRoutes = require("./modules/hrm/Route/ExportRoute");
+const inventoryRoutes = require("./modules/inventory/Route/inventory.route");
 const app = express();
 
 // --- Error Wrapper for Async Routes ---
@@ -40,6 +41,9 @@ app.use("/v2/api/employee", CreateEmployee);
 app.use("/v2/api/office-location", CreateOfficeLocation);
 app.use("/v2/api/attendance", attendaceRow);
 app.use("/v2/api/export", exportRoutes);
+
+// Inventory Module Routes
+app.use("/v2/api/inventory", inventoryRoutes);
 
 // --- 3. Error Handling Middleware ---
 // 404 Handler
