@@ -1,5 +1,6 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../../../common/db.config");
+const { date } = require("zod");
 
 const StockTransaction = sequelize.define(
   "StockTransaction",
@@ -11,16 +12,22 @@ const StockTransaction = sequelize.define(
     },
     type: {
       type: DataTypes.ENUM(
-        "INWARD", // Purchase/Stock Receive
-        "OUTWARD", // Sale/Stock Issue
-        "RETURN", // Sales Return or Purchase Return
-        "DAMAGE", // Wastage
-        "ADJUSTMENT", // Audit Correction
+        "INWARD",
+        "OUTWARD",
+        "RETURN",
+        "DAMAGE",
+        "ADJUSTMENT",
       ),
       allowNull: false,
     },
 
     // --- Industrial Links ---
+    date: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+    },
+
     ProductId: {
       type: DataTypes.UUID,
       allowNull: false,
@@ -28,32 +35,44 @@ const StockTransaction = sequelize.define(
     },
     WarehouseId: {
       type: DataTypes.UUID,
-      allowNull: false, // Har transaction kisi warehouse se honi chahiye
+      allowNull: false,
       references: { model: "inventory_warehouses", key: "id" },
     },
     partner_id: {
       type: DataTypes.UUID,
-      allowNull: true, // INWARD/OUTWARD ke liye validation se check karenge
+      allowNull: true,
       comment: "Link to Supplier or Customer",
+    },
+    manufacturer_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
     },
 
     // --- Quantity & Value ---
     quantity: {
-      type: DataTypes.DECIMAL(15, 3), // Precision badha di (e.g., 100.550 kg)
+      type: DataTypes.DECIMAL(15, 3),
       allowNull: false,
     },
     unit_price: {
       type: DataTypes.DECIMAL(15, 2),
       allowNull: false,
       defaultValue: 0,
-      comment: "Valuation ke liye unit rate",
     },
 
-    // --- Traceability ---
+    // --- Traceability & Status ---
     batch_number: { type: DataTypes.STRING },
     reference_no: { type: DataTypes.STRING },
+    movement_date: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+    },
+    status: {
+      type: DataTypes.ENUM("PENDING", "COMPLETED", "CANCELLED"),
+      defaultValue: "COMPLETED",
+      allowNull: false,
+    },
     remarks: { type: DataTypes.TEXT },
-
     created_by: {
       type: DataTypes.UUID,
       allowNull: false,
@@ -62,12 +81,10 @@ const StockTransaction = sequelize.define(
   {
     tableName: "inventory_transactions",
     timestamps: true,
-    updatedAt: false, //
+    updatedAt: false, // Transaction record change nahi hona chahiye
 
-    // --- Industrial Validations ---
     validate: {
       partnerRequired() {
-        // INWARD aur OUTWARD ke liye partner zaroori hai
         if (["INWARD", "OUTWARD"].includes(this.type) && !this.partner_id) {
           throw new Error(
             `${this.type} transaction ke liye Partner (Supplier/Customer) zaroori hai.`,
@@ -81,6 +98,7 @@ const StockTransaction = sequelize.define(
       { fields: ["WarehouseId"] },
       { fields: ["partner_id"] },
       { fields: ["batch_number"] },
+      { fields: ["movement_date"] },
     ],
   },
 );
