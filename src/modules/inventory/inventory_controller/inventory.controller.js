@@ -47,9 +47,10 @@ const processStockMovement = async (req, res) => {
 
     if (!product?.is_active || !warehouse?.is_active) {
       await t.rollback();
-      return res
-        .status(400)
-        .json({ success: false, message: "Product/Warehouse inactive." });
+      return res.status(400).json({
+        success: false,
+        message: "Product ya Warehouse active nahi hai.",
+      });
     }
 
     // Atomic Stock Update with Row Locking
@@ -85,12 +86,10 @@ const processStockMovement = async (req, res) => {
         newQuantity = currentQty + moveQty; // Can be + or -
         if (newQuantity < 0) {
           await t.rollback();
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Adjustment leads to negative stock.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Adjustment leads to negative stock.",
+          });
         }
         break;
       default:
@@ -118,8 +117,6 @@ const processStockMovement = async (req, res) => {
       { transaction: t },
     );
 
-<<<<<<< HEAD
-=======
     // 4. Update Stock Level (Locking active hai)
     // Industrial Tip: Agar batch-wise tracking chahiye toh where mein batch_number add karein
     let stockRecord = await db.StockLevel.findOne({
@@ -155,7 +152,6 @@ const processStockMovement = async (req, res) => {
       newQuantity -= moveQty;
     }
 
->>>>>>> 4b6be892130c812c096f4aac24d69d7a4002cb04
     await stockRecord.update(
       {
         current_quantity: newQuantity,
@@ -295,12 +291,6 @@ const bulkProcessStockMovement = async (req, res) => {
   try {
     const { movements } = req.body; // Array of movement objects
 
-<<<<<<< HEAD
-module.exports = {
-  processStockMovement,
-  updateStockMovement,
-  getInventoryDashboard,
-=======
     if (!Array.isArray(movements) || movements.length === 0) {
       return res
         .status(400)
@@ -447,5 +437,4 @@ module.exports = {
   getInventoryDashboard,
   bulkProcessStockMovement,
   getTransactionHistory,
->>>>>>> 4b6be892130c812c096f4aac24d69d7a4002cb04
 };
