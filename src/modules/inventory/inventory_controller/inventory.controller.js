@@ -47,9 +47,16 @@ const processStockMovement = async (req, res) => {
 
     if (!product?.is_active || !warehouse?.is_active) {
       await t.rollback();
+<<<<<<< HEAD
       return res
         .status(400)
         .json({ success: false, message: "Product/Warehouse inactive." });
+=======
+      return res.status(400).json({
+        success: false,
+        message: "Product ya Warehouse active nahi hai.",
+      });
+>>>>>>> 4b6be892130c812c096f4aac24d69d7a4002cb04
     }
 
     // Atomic Stock Update with Row Locking
@@ -118,6 +125,44 @@ const processStockMovement = async (req, res) => {
       { transaction: t },
     );
 
+<<<<<<< HEAD
+=======
+    // 4. Update Stock Level (Locking active hai)
+    // Industrial Tip: Agar batch-wise tracking chahiye toh where mein batch_number add karein
+    let stockRecord = await db.StockLevel.findOne({
+      where: { ProductId: productId, WarehouseId: warehouseId },
+      lock: t.LOCK.UPDATE,
+      transaction: t,
+    });
+
+    if (!stockRecord) {
+      stockRecord = await db.StockLevel.create(
+        {
+          ProductId: productId,
+          WarehouseId: warehouseId,
+          current_quantity: 0,
+        },
+        { transaction: t },
+      );
+    }
+
+    let newQuantity = Number(stockRecord.current_quantity);
+    const moveQty = Number(quantity);
+
+    if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type)) {
+      newQuantity += moveQty;
+    } else {
+      if (newQuantity < moveQty) {
+        await t.rollback();
+        return res.status(400).json({
+          success: false,
+          message: "Stock kam hai. Process nahi ho sakta.",
+        });
+      }
+      newQuantity -= moveQty;
+    }
+
+>>>>>>> 4b6be892130c812c096f4aac24d69d7a4002cb04
     await stockRecord.update(
       {
         current_quantity: newQuantity,
@@ -252,9 +297,162 @@ const getInventoryDashboard = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+const bulkProcessStockMovement = async (req, res) => {
+  const t = await db.sequelize.transaction();
+  try {
+    const { movements } = req.body; // Array of movement objects
 
+<<<<<<< HEAD
 module.exports = {
   processStockMovement,
   updateStockMovement,
   getInventoryDashboard,
+=======
+    if (!Array.isArray(movements) || movements.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid data format." });
+    }
+
+    const processedTransactions = [];
+
+    for (const item of movements) {
+      const {
+        productId,
+        warehouseId,
+        quantity,
+        type,
+        batch_number,
+        reference_no,
+        partner_id,
+        unit_price,
+      } = item;
+
+      // 1. Validation for each item
+      if (!productId || !warehouseId || !quantity || !type) {
+        throw new Error(`Invalid data for product ${productId}`);
+      }
+
+      // 2. Lock and Update Stock (Ek-ek karke process zaroori hai for concurrency safety)
+      let stockRecord = await db.StockLevel.findOne({
+        where: { ProductId: productId, WarehouseId: warehouseId },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+
+      if (!stockRecord) {
+        stockRecord = await db.StockLevel.create(
+          {
+            ProductId: productId,
+            WarehouseId: warehouseId,
+            current_quantity: 0,
+          },
+          { transaction: t },
+        );
+      }
+
+      let currentQty = Number(stockRecord.current_quantity);
+      const moveQty = Number(quantity);
+
+      if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type)) {
+        currentQty += moveQty;
+      } else {
+        if (currentQty < moveQty) {
+          throw new Error(`Insufficient stock for Product ID: ${productId}`);
+        }
+        currentQty -= moveQty;
+      }
+
+      // Update current stock
+      await stockRecord.update(
+        { current_quantity: currentQty },
+        { transaction: t },
+      );
+
+      // Prepare data for bulk insertion
+      processedTransactions.push({
+        ProductId: productId,
+        WarehouseId: warehouseId,
+        partner_id,
+        type,
+        quantity,
+        unit_price: unit_price || 0,
+        batch_number,
+        reference_no,
+        created_by: req.user.id,
+      });
+    }
+
+    // 3. Bulk Insert into Transaction Log
+    await db.StockTransaction.bulkCreate(processedTransactions, {
+      transaction: t,
+    });
+
+    await t.commit();
+    return res
+      .status(201)
+      .json({ success: true, message: "Bulk stock updated successfully." });
+  } catch (error) {
+    await t.rollback();
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Get Transaction History with Filters & Pagination
+ */
+const getTransactionHistory = async (req, res) => {
+  try {
+    const {
+      productId,
+      warehouseId,
+      type,
+      startDate,
+      endDate,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const offset = (page - 1) * limit;
+    const whereClause = {};
+
+    // Dynamic filtering
+    if (productId) whereClause.ProductId = productId;
+    if (warehouseId) whereClause.WarehouseId = warehouseId;
+    if (type) whereClause.type = type;
+    if (startDate || endDate) {
+      whereClause.createdAt = {};
+      if (startDate) whereClause.createdAt[Op.gte] = new Date(startDate);
+      if (endDate) whereClause.createdAt[Op.lte] = new Date(endDate);
+    }
+
+    const { count, rows } = await db.StockTransaction.findAndCountAll({
+      where: whereClause,
+      include: [
+        { model: db.Product, attributes: ["name", "sku_code"] },
+        { model: db.Warehouse, attributes: ["name"] },
+      ],
+      order: [["createdAt", "DESC"]],
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+    });
+
+    return res.status(200).json({
+      success: true,
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page),
+      data: rows,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+module.exports = {
+  processStockMovement,
+  getInventoryDashboard,
+  bulkProcessStockMovement,
+  getTransactionHistory,
+>>>>>>> 4b6be892130c812c096f4aac24d69d7a4002cb04
 };

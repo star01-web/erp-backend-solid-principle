@@ -31,6 +31,16 @@ router.post(
   verifyToken,
   asyncHandler(invCtrl.processStockMovement),
 );
+router.post(
+  "/bulkmovement",
+  verifyToken,
+  asyncHandler(invCtrl.bulkProcessStockMovement),
+);
+router.get(
+  "/alltransactions",
+  verifyToken,
+  asyncHandler(invCtrl.getTransactionHistory),
+);
 
 router.get(
   "/dashboard",
