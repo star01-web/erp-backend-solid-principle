@@ -117,8 +117,7 @@ const processStockMovement = async (req, res) => {
       { transaction: t },
     );
 
-    // 4. Update Stock Level (Locking active hai)
-    // Industrial Tip: Agar batch-wise tracking chahiye toh where mein batch_number add karein
+    // Update Stock Level
     await stockRecord.update(
       {
         current_quantity: newQuantity,
@@ -137,7 +136,6 @@ const processStockMovement = async (req, res) => {
 
 /**
  * 2. UPDATE EXISTING STOCK MOVEMENT (Reversal Logic)
- * Purani entry ka asar khatam karke naya asar apply karta hai.
  */
 const updateStockMovement = async (req, res) => {
   const { id } = req.params;
@@ -260,7 +258,7 @@ const getInventoryDashboard = async (req, res) => {
 const bulkProcessStockMovement = async (req, res) => {
   const t = await db.sequelize.transaction();
   try {
-    const { movements } = req.body; // Array of movement objects
+    const { movements } = req.body;
 
     if (!Array.isArray(movements) || movements.length === 0) {
       return res
@@ -282,12 +280,10 @@ const bulkProcessStockMovement = async (req, res) => {
         unit_price,
       } = item;
 
-      // 1. Validation for each item
       if (!productId || !warehouseId || !quantity || !type) {
         throw new Error(`Invalid data for product ${productId}`);
       }
 
-      // 2. Lock and Update Stock
       let stockRecord = await db.StockLevel.findOne({
         where: { ProductId: productId, WarehouseId: warehouseId },
         lock: t.LOCK.UPDATE,
@@ -317,13 +313,11 @@ const bulkProcessStockMovement = async (req, res) => {
         currentQty -= moveQty;
       }
 
-      // Update current stock
       await stockRecord.update(
         { current_quantity: currentQty },
         { transaction: t },
       );
 
-      // Prepare data for bulk insertion
       processedTransactions.push({
         ProductId: productId,
         WarehouseId: warehouseId,
@@ -337,7 +331,6 @@ const bulkProcessStockMovement = async (req, res) => {
       });
     }
 
-    // 3. Bulk Insert into Transaction Log
     await db.StockTransaction.bulkCreate(processedTransactions, {
       transaction: t,
     });
@@ -353,7 +346,7 @@ const bulkProcessStockMovement = async (req, res) => {
 };
 
 /**
- * 5. Get Transaction History with Filters & Pagination
+ * 5. GET TRANSACTION HISTORY
  */
 const getTransactionHistory = async (req, res) => {
   try {
@@ -370,7 +363,6 @@ const getTransactionHistory = async (req, res) => {
     const offset = (page - 1) * limit;
     const whereClause = {};
 
-    // Dynamic filtering
     if (productId) whereClause.ProductId = productId;
     if (warehouseId) whereClause.WarehouseId = warehouseId;
     if (type) whereClause.type = type;
@@ -403,9 +395,10 @@ const getTransactionHistory = async (req, res) => {
   }
 };
 
+// 6. ALL EXPORTS ADDED HERE
 module.exports = {
   processStockMovement,
-  updateStockMovement,
+  updateStockMovement, // Fixed: Added update method
   getInventoryDashboard,
   bulkProcessStockMovement,
   getTransactionHistory,

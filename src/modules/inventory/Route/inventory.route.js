@@ -31,6 +31,12 @@ router.post(
   verifyToken,
   asyncHandler(invCtrl.processStockMovement),
 );
+router.put(
+  "/movement/:id",
+  verifyToken,
+  asyncHandler(invCtrl.updateStockMovement),
+);
+
 router.post(
   "/bulkmovement",
   verifyToken,
