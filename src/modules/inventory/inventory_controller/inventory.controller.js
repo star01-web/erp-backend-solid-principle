@@ -47,16 +47,9 @@ const processStockMovement = async (req, res) => {
 
     if (!product?.is_active || !warehouse?.is_active) {
       await t.rollback();
-<<<<<<< HEAD
       return res
         .status(400)
         .json({ success: false, message: "Product/Warehouse inactive." });
-=======
-      return res.status(400).json({
-        success: false,
-        message: "Product ya Warehouse active nahi hai.",
-      });
->>>>>>> 4b6be892130c812c096f4aac24d69d7a4002cb04
     }
 
     // Atomic Stock Update with Row Locking
