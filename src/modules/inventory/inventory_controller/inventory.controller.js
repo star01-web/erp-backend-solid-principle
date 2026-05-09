@@ -119,39 +119,6 @@ const processStockMovement = async (req, res) => {
 
     // 4. Update Stock Level (Locking active hai)
     // Industrial Tip: Agar batch-wise tracking chahiye toh where mein batch_number add karein
-    let stockRecord = await db.StockLevel.findOne({
-      where: { ProductId: productId, WarehouseId: warehouseId },
-      lock: t.LOCK.UPDATE,
-      transaction: t,
-    });
-
-    if (!stockRecord) {
-      stockRecord = await db.StockLevel.create(
-        {
-          ProductId: productId,
-          WarehouseId: warehouseId,
-          current_quantity: 0,
-        },
-        { transaction: t },
-      );
-    }
-
-    let newQuantity = Number(stockRecord.current_quantity);
-    const moveQty = Number(quantity);
-
-    if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type)) {
-      newQuantity += moveQty;
-    } else {
-      if (newQuantity < moveQty) {
-        await t.rollback();
-        return res.status(400).json({
-          success: false,
-          message: "Stock kam hai. Process nahi ho sakta.",
-        });
-      }
-      newQuantity -= moveQty;
-    }
-
     await stockRecord.update(
       {
         current_quantity: newQuantity,
@@ -286,6 +253,10 @@ const getInventoryDashboard = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+/**
+ * 4. BULK PROCESS STOCK MOVEMENT
+ */
 const bulkProcessStockMovement = async (req, res) => {
   const t = await db.sequelize.transaction();
   try {
@@ -316,7 +287,7 @@ const bulkProcessStockMovement = async (req, res) => {
         throw new Error(`Invalid data for product ${productId}`);
       }
 
-      // 2. Lock and Update Stock (Ek-ek karke process zaroori hai for concurrency safety)
+      // 2. Lock and Update Stock
       let stockRecord = await db.StockLevel.findOne({
         where: { ProductId: productId, WarehouseId: warehouseId },
         lock: t.LOCK.UPDATE,
@@ -382,7 +353,7 @@ const bulkProcessStockMovement = async (req, res) => {
 };
 
 /**
- * Get Transaction History with Filters & Pagination
+ * 5. Get Transaction History with Filters & Pagination
  */
 const getTransactionHistory = async (req, res) => {
   try {
@@ -434,6 +405,7 @@ const getTransactionHistory = async (req, res) => {
 
 module.exports = {
   processStockMovement,
+  updateStockMovement,
   getInventoryDashboard,
   bulkProcessStockMovement,
   getTransactionHistory,
