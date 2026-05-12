@@ -14,6 +14,7 @@ const processStockMovement = async (req, res) => {
       productId,
       warehouseId,
       partner_id,
+      manufacturer_id, // ✅ IMPROVEMENT: Added manufacturer_id for tracking
       quantity,
       unit_price,
       type,
@@ -106,6 +107,7 @@ const processStockMovement = async (req, res) => {
         ProductId: productId,
         WarehouseId: warehouseId,
         partner_id,
+        manufacturer_id, // ✅ IMPROVEMENT: Saves manufacturer info
         type: type.toUpperCase(),
         quantity: moveQty,
         unit_price: unit_price || 0,
@@ -173,17 +175,18 @@ const updateStockMovement = async (req, res) => {
     const finalType = (newType || oldTx.type).toUpperCase();
     const finalQty =
       newQty !== undefined ? Number(newQty) : Number(oldTx.quantity);
+    const absFinalQty = Math.abs(finalQty);
 
     if (["INWARD", "RETURN", "ADJUSTMENT"].includes(finalType)) {
       currentQty += finalQty;
     } else {
-      if (currentQty < Math.abs(finalQty)) {
+      if (currentQty < absFinalQty) {
         await t.rollback();
         return res
           .status(400)
           .json({ success: false, message: "Insufficient stock for update." });
       }
-      currentQty -= Math.abs(finalQty);
+      currentQty -= absFinalQty;
     }
 
     if (currentQty < 0) {
@@ -277,6 +280,7 @@ const bulkProcessStockMovement = async (req, res) => {
         batch_number,
         reference_no,
         partner_id,
+        manufacturer_id, // ✅ IMPROVEMENT: Extract manufacturer_id
         unit_price,
       } = item;
 
@@ -303,14 +307,16 @@ const bulkProcessStockMovement = async (req, res) => {
 
       let currentQty = Number(stockRecord.current_quantity);
       const moveQty = Number(quantity);
+      const absQty = Math.abs(moveQty); // ✅ IMPROVEMENT: Added Math.abs for safety
 
-      if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type)) {
+      if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type.toUpperCase())) {
         currentQty += moveQty;
       } else {
-        if (currentQty < moveQty) {
+        if (currentQty < absQty) {
+          // ✅ IMPROVEMENT: Used absQty to prevent bugs
           throw new Error(`Insufficient stock for Product ID: ${productId}`);
         }
-        currentQty -= moveQty;
+        currentQty -= absQty; // ✅ IMPROVEMENT: Used absQty
       }
 
       await stockRecord.update(
@@ -322,8 +328,9 @@ const bulkProcessStockMovement = async (req, res) => {
         ProductId: productId,
         WarehouseId: warehouseId,
         partner_id,
-        type,
-        quantity,
+        manufacturer_id, // ✅ IMPROVEMENT: Push to bulk create array
+        type: type.toUpperCase(),
+        quantity: moveQty,
         unit_price: unit_price || 0,
         batch_number,
         reference_no,
@@ -377,6 +384,13 @@ const getTransactionHistory = async (req, res) => {
       include: [
         { model: db.Product, attributes: ["name", "sku_code"] },
         { model: db.Warehouse, attributes: ["name"] },
+        // ✅ IMPROVEMENT: Added Partner includes so frontend can show who supplied/manufactured
+        { model: db.Partner, as: "partner", attributes: ["id", "name"] },
+        {
+          model: db.Partner,
+          as: "originManufacturer",
+          attributes: ["id", "name"],
+        },
       ],
       order: [["createdAt", "DESC"]],
       limit: parseInt(limit),
@@ -398,7 +412,7 @@ const getTransactionHistory = async (req, res) => {
 // 6. ALL EXPORTS ADDED HERE
 module.exports = {
   processStockMovement,
-  updateStockMovement, // Fixed: Added update method
+  updateStockMovement,
   getInventoryDashboard,
   bulkProcessStockMovement,
   getTransactionHistory,

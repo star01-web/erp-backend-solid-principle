@@ -12,7 +12,7 @@ const Product = sequelize.define(
     sku_code: {
       type: DataTypes.STRING,
       unique: true,
-      allowNull: false, //
+      allowNull: false,
     },
     name: { type: DataTypes.STRING, allowNull: false },
 
@@ -25,23 +25,17 @@ const Product = sequelize.define(
     description: { type: DataTypes.TEXT },
     hsn_code: { type: DataTypes.STRING }, // Tax Compliance
 
-    // Manufacturer Link
-    manufacturer_id: {
-      type: DataTypes.UUID,
-      allowNull: true,
-    },
-
     category: { type: DataTypes.STRING },
-    unit: { type: DataTypes.STRING, defaultValue: "pcs" }, //
+    unit: { type: DataTypes.STRING, defaultValue: "pcs" },
 
     // --- Stock Controls ---
     min_stock_level: {
       type: DataTypes.INTEGER,
-      defaultValue: 5, //
+      defaultValue: 5,
     },
     max_stock_level: {
       type: DataTypes.INTEGER,
-      defaultValue: 1000, //
+      defaultValue: 1000,
     },
 
     is_active: { type: DataTypes.BOOLEAN, defaultValue: true },
@@ -49,11 +43,10 @@ const Product = sequelize.define(
   {
     tableName: "inventory_products",
     timestamps: true,
-    paranoid: true, //
+    paranoid: true,
     indexes: [
       { fields: ["sku_code"] },
       { fields: ["color"] }, // Color ke base par filter karne ke liye fast search
-      { fields: ["manufacturer_id"] },
     ],
   },
 );

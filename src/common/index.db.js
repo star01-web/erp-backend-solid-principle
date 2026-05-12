@@ -83,14 +83,14 @@ db.EmployeeMaster.belongsTo(db.EmployeeMaster, {
 
 // --- INVENTORY ASSOCIATIONS ---
 
-// 1. Product & Warehouse Many-to-Many via StockLevel
+// 1. Product & Warehouse Many-to-Many via StockLevel (Correct ✅)
 db.Product.hasMany(db.StockLevel, { foreignKey: "ProductId" });
 db.StockLevel.belongsTo(db.Product, { foreignKey: "ProductId" });
 
 db.Warehouse.hasMany(db.StockLevel, { foreignKey: "WarehouseId" });
 db.StockLevel.belongsTo(db.Warehouse, { foreignKey: "WarehouseId" });
 
-// 2. Transactions Relations (Basic)
+// 2. Transactions Relations (Correct ✅)
 db.Product.hasMany(db.StockTransaction, { foreignKey: "ProductId" });
 db.StockTransaction.belongsTo(db.Product, { foreignKey: "ProductId" });
 
@@ -99,18 +99,22 @@ db.StockTransaction.belongsTo(db.Warehouse, { foreignKey: "WarehouseId" });
 
 // --- UPDATED INDUSTRIAL ASSOCIATIONS ---
 
-// 3. Product & Manufacturer (Product kisne banaya)
-db.Partner.hasMany(db.Product, {
-  foreignKey: "manufacturer_id",
-  as: "manufacturedProducts",
-});
-db.Product.belongsTo(db.Partner, {
-  foreignKey: "manufacturer_id",
-  as: "manufacturer",
+// 3. Product & Manufacturer (CORRECTED: Many-to-Many 🛠️)
+db.Product.belongsToMany(db.Partner, {
+  through: "product_manufacturers", // <-- Quotes ke andar table ka naam
+  foreignKey: "ProductId",
+  otherKey: "PartnerId",
+  as: "manufacturers",
 });
 
-// 4. Transaction & Partner (Maal kisne bheja ya kisko gaya)
-// Inward ke waqt ye Supplier hoga, Outward ke waqt Customer/Trader
+db.Partner.belongsToMany(db.Product, {
+  through: "product_manufacturers", // <-- Quotes ke andar table ka naam
+  foreignKey: "PartnerId",
+  otherKey: "ProductId",
+  as: "manufacturedProducts",
+});
+
+// 4. Transaction & Partner (Correct ✅)
 db.Partner.hasMany(db.StockTransaction, {
   foreignKey: "partner_id",
   as: "transactions",
@@ -120,7 +124,7 @@ db.StockTransaction.belongsTo(db.Partner, {
   as: "partner",
 });
 
-// Optional: Agar aap Transaction level par bhi Manufacturer track kar rahe hain
+// Transaction Level par Manufacturer track karne ke liye (Correct ✅)
 db.Partner.hasMany(db.StockTransaction, {
   foreignKey: "manufacturer_id",
   as: "originTransactions",

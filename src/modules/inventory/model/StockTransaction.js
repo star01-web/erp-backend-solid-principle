@@ -1,6 +1,5 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../../../common/db.config");
-const { date } = require("zod");
 
 const StockTransaction = sequelize.define(
   "StockTransaction",
@@ -46,6 +45,7 @@ const StockTransaction = sequelize.define(
     manufacturer_id: {
       type: DataTypes.UUID,
       allowNull: true,
+      comment: "Track which manufacturer's stock is moving",
     },
 
     // --- Quantity & Value ---
@@ -97,6 +97,7 @@ const StockTransaction = sequelize.define(
       { fields: ["ProductId"] },
       { fields: ["WarehouseId"] },
       { fields: ["partner_id"] },
+      { fields: ["manufacturer_id"] }, // Add kiya gaya for fast querying
       { fields: ["batch_number"] },
       { fields: ["movement_date"] },
     ],
