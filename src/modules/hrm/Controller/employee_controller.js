@@ -2,7 +2,7 @@ const EmployeeMaster = require("../model/EmployeeMaster.js");
 const db = require("../../../common/index.db.js");
 const { Op } = require("sequelize");
 // const { createEmployeeMiddleware } = require('../middleware/createEmployee_mw.js');
-// const bcrypt = require('bcrypt');
+const bcrypt = require("bcrypt");
 
 const CreateEmployee = async (req, res) => {
   // Transaction start taaki dono table sync rahein
@@ -28,12 +28,10 @@ const CreateEmployee = async (req, res) => {
 
     // Validation (Basic check)
     if (!email || !password || !name || !location_id) {
-      return res
-        .status(400)
-        .json({
-          message:
-            "Zaroori fields missing hain (Email, Password, Name, Location).",
-        });
+      return res.status(400).json({
+        message:
+          "Zaroori fields missing hain (Email, Password, Name, Location).",
+      });
     }
 
     // 2. Password Hash karein
@@ -278,11 +276,9 @@ const bulkCreateEmployees = async (req, res) => {
 
     // 1. Validation: Check karein ki data array format mein hai ya nahi
     if (!Array.isArray(employeesData) || employeesData.length === 0) {
-      return res
-        .status(400)
-        .json({
-          message: "Data ek valid Array of Objects format mein hona chahiye.",
-        });
+      return res.status(400).json({
+        message: "Data ek valid Array of Objects format mein hona chahiye.",
+      });
     }
 
     const createdRecords = [];
@@ -307,22 +303,21 @@ const bulkCreateEmployees = async (req, res) => {
 
       // Basic validation har ek item ke liye
       if (!email || !password || !name || !location_id) {
-        // Error throw karenge toh seedha catch block me jayega aur transaction rollback ho jayega
         throw new Error(
           `'${name || email || "Ek employee"}' ka data in-complete hai. Email, Password, Name aur Location zaroori hain.`,
         );
       }
 
-      // (Optional) Password Hash karein
-      // const hashedPassword = await bcrypt.hash(password, 10);
+      // Security: Password Hash karein (DO NOT store plain text)
+      const hashedPassword = await bcrypt.hash(password, 10);
 
       // 3. STEP 1: User Table mein entry (Login account)
       const newUser = await db.User.create(
         {
           name: name,
           email: email,
-          username: username || email, // Agar username nahi aaya toh email use kar lenge
-          password: password,
+          username: username || email,
+          password: hashedPassword, // Use hashed password here
           role: role || "EMPLOYEE",
         },
         { transaction: t },
@@ -351,7 +346,7 @@ const bulkCreateEmployees = async (req, res) => {
       createdRecords.push({
         emp_code: newEmployee.emp_code,
         loginId: newUser.id,
-        employee_master_id: newEmployee.employee_master_id,
+        employee_master_id: newEmployee.id, // Fixed: usually it's just .id in Sequelize unless explicitly named employee_master_id
       });
     }
 
@@ -366,17 +361,26 @@ const bulkCreateEmployees = async (req, res) => {
   } catch (error) {
     // Agar loop me kahin bhi error aayi, toh sab kuch wapas (Rollback)
     await t.rollback();
-    console.error("Error in Bulk Registration:", error);
+
+    // Better Error Logging: Check if it's a Sequelize Validation/Unique error
+    let errorMessage = error.message;
+    if (
+      error.name === "SequelizeUniqueConstraintError" ||
+      error.name === "SequelizeValidationError"
+    ) {
+      errorMessage = error.errors.map((e) => e.message).join(", ");
+    }
+
+    console.error("Error in Bulk Registration:", errorMessage);
 
     return res.status(500).json({
       status: "Failed",
       message:
         "Bulk Insert fail hua. Koi bhi record database me save nahi hua.",
-      error: error.message,
+      error: errorMessage, // Now the frontend will see EXACTLY what failed (e.g., "email must be unique")
     });
   }
 };
-
 module.exports = {
   CreateEmployee,
   updateEmployee,
