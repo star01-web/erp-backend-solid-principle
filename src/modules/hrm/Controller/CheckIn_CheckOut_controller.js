@@ -105,7 +105,9 @@ const handleCheckIn = async (req, res) => {
     for (const emp of employeesToPunch) {
       const position = (emp.position || "").toLowerCase();
       const isFieldStaff =
-        position.includes("sales") || position.includes("driver");
+        position.includes("sales") ||
+        position.includes("driver") ||
+        position.includes("field");
 
       // Agar office ke bahar hai AUR field staff bhi nahi hai, toh block karein
       if (!matchedOffice && !isFieldStaff) {
