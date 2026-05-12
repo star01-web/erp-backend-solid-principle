@@ -34,8 +34,31 @@ const CreateEmployee = async (req, res) => {
       });
     }
 
-    // 2. Password Hash karein
-    // const hashedPassword = await bcrypt.hash(password, 10);
+    // 2. Password handling: let the User model hook hash the password
+
+    // Pre-check: Email/username/phone uniqueness to provide friendlier errors
+    const existingUser = await db.User.findOne({
+      where: {
+        [Op.or]: [{ email: email }, { username: username || email }],
+      },
+    });
+
+    if (existingUser) {
+      await t.rollback();
+      return res.status(409).json({
+        message: "Email or username already in use.",
+      });
+    }
+
+    if (phone) {
+      const existingPhone = await db.EmployeeMaster.findOne({
+        where: { phone },
+      });
+      if (existingPhone) {
+        await t.rollback();
+        return res.status(409).json({ message: "Phone already in use." });
+      }
+    }
 
     // 3. STEP 1: Pehle User Table mein entry (Login account banana)
     // Note: 'email' ko hi hum 'username' ki tarah use kar sakte hain ya alag field le sakte hain
@@ -43,9 +66,9 @@ const CreateEmployee = async (req, res) => {
       {
         name: name,
         email: email,
-        username: username,
+        username: username || email,
         password: password,
-        role: role || "EMPLOYEE", // Admin/Sales/etc jo aapne registration form se bheja ho
+        role: role || "EMPLOYEE",
       },
       { transaction: t },
     );
@@ -86,9 +109,19 @@ const CreateEmployee = async (req, res) => {
     // Agar kahin bhi galti hui toh transaction cancel (Rollback)
     await t.rollback();
     console.error("Error in Registration:", error);
+
+    let errorMessage = error.message;
+    if (
+      error.name === "SequelizeUniqueConstraintError" ||
+      error.name === "SequelizeValidationError"
+    ) {
+      errorMessage = error.errors.map((e) => e.message).join(", ");
+      return res.status(400).json({ message: errorMessage });
+    }
+
     return res.status(500).json({
       message: "Internal Server Error",
-      error: error.message,
+      error: errorMessage,
     });
   }
 };
@@ -308,8 +341,25 @@ const bulkCreateEmployees = async (req, res) => {
         );
       }
 
-      // Security: Password Hash karein (DO NOT store plain text)
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // Security: Let User model hash the password via hooks (avoid double-hash)
+
+      // Pre-checks for uniqueness to fail fast with clear messages
+      const conflictUser = await db.User.findOne({
+        where: { [Op.or]: [{ email }, { username: username || email }] },
+        transaction: t,
+      });
+      if (conflictUser) {
+        throw new Error(`User with email/username '${email}' already exists`);
+      }
+      if (phone) {
+        const conflictPhone = await db.EmployeeMaster.findOne({
+          where: { phone },
+          transaction: t,
+        });
+        if (conflictPhone) {
+          throw new Error(`Phone '${phone}' already in use`);
+        }
+      }
 
       // 3. STEP 1: User Table mein entry (Login account)
       const newUser = await db.User.create(
@@ -317,7 +367,7 @@ const bulkCreateEmployees = async (req, res) => {
           name: name,
           email: email,
           username: username || email,
-          password: hashedPassword, // Use hashed password here
+          password: password, // model hook will hash
           role: role || "EMPLOYEE",
         },
         { transaction: t },
