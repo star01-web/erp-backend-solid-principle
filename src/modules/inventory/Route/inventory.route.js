@@ -58,7 +58,7 @@ router.get(
 // 2. PRODUCT MANAGEMENT
 // ==========================================
 router.post("/products", verifyToken, asyncHandler(prodCtrl.createProduct));
-router.get("/products", verifyToken, asyncHandler(prodCtrl.getProducts));
+router.get("/products", verifyToken, asyncHandler(prodCtrl.getAllProducts));
 router.put("/products/:id", verifyToken, asyncHandler(prodCtrl.updateProduct));
 router.post(
   "/bulkproducts",
