@@ -60,6 +60,11 @@ router.get(
 router.post("/products", verifyToken, asyncHandler(prodCtrl.createProduct));
 router.get("/products", verifyToken, asyncHandler(prodCtrl.getProducts));
 router.put("/products/:id", verifyToken, asyncHandler(prodCtrl.updateProduct));
+router.post(
+  "/bulkproducts",
+  verifyToken,
+  asyncHandler(prodCtrl.bulkCreateProducts),
+);
 // Industrial alternative for delete
 router.patch(
   "/products/:id/toggle-status",

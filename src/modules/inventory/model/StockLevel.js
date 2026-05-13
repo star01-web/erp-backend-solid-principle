@@ -9,20 +9,42 @@ const StockLevel = sequelize.define(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    // Physical Stock: Jo asal mein godown mein rakha hai
-    current_quantity: {
-      type: DataTypes.DECIMAL(15, 3), // Industry mein precision 3 decimal tak rakhte hain (e.g. 10.550 kg)
-      defaultValue: 0,
-      validate: { min: 0 }, //
+    // --- Foreign Keys (Explicitly defined for safe indexing) ---
+    ProductId: {
+      type: DataTypes.UUID,
+      allowNull: false,
     },
-    // Reserved Stock: Wo maal jo kisi order ke liye book ho chuka hai
+    WarehouseId: {
+      type: DataTypes.UUID,
+      allowNull: false,
+    },
+    manufacturer_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      comment: "Kis manufacturer ka stock hai",
+    },
+
+    // --- Variant / Tracking Attribute ---
+    color: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: "Standard", // Agar color na de, toh 'Standard' save ho
+      comment: "Product ka rang (e.g., Red, Blue, #001aff)",
+    },
+
+    // --- Physical Stock ---
+    current_quantity: {
+      type: DataTypes.DECIMAL(15, 3),
+      defaultValue: 0,
+      validate: { min: 0 },
+    },
+
+    // --- Reserved Stock ---
     reserved_quantity: {
       type: DataTypes.DECIMAL(15, 3),
       defaultValue: 0,
       validate: { min: 0 },
     },
-    // Available Stock (Virtual): current_quantity - reserved_quantity
-    // Isse pata chalta hai ki naya order kitne ka le sakte hain
 
     last_updated_at: {
       type: DataTypes.DATE,
@@ -31,11 +53,13 @@ const StockLevel = sequelize.define(
   },
   {
     tableName: "inventory_stock_levels",
-    timestamps: false, // Kyunki last_updated_at manually handle ho raha hai
+    timestamps: false,
     indexes: [
       {
         unique: true,
-        fields: ["ProductId", "WarehouseId"], //
+        // Ab ek Warehouse mein, Ek Product, Ek Manufacturer aur Ek Color ki ek hi combined entry hogi
+        name: "unique_stock_idx",
+        fields: ["ProductId", "WarehouseId", "manufacturer_id", "color"],
       },
     ],
   },

@@ -1,10 +1,258 @@
 const db = require("../../../common/index.db");
 const { Op } = require("sequelize");
 
-/**
- * 1. PROCESS NEW STOCK MOVEMENT
- * Use cases: Inward, Outward, Return, Scrap, Adjustment
- */
+// 1. PRODUCT MANAGEMENT (Master Data)
+
+const createProduct = async (req, res) => {
+  try {
+    const {
+      sku_code,
+      name,
+      color, // Note: Color abhi bhi yahan request mein aa sakta hai agar future mein default color save karna ho, lekin model mein nahi hai.
+      hsn_code,
+      manufacturer_ids, // Array of Manufacturer IDs (Many-to-Many)
+      category,
+      unit,
+      min_stock_level,
+      max_stock_level,
+    } = req.body;
+
+    // 1. Basic Validation
+    if (!sku_code || !name) {
+      return res.status(400).json({
+        success: false,
+        message: "SKU Code aur Product Name mandatory hain.",
+      });
+    }
+
+    const standardizedSKU = sku_code.trim().toUpperCase();
+    const cleanName = name.trim();
+
+    // 2. Strict Duplicate Checks
+    const existingSku = await db.Product.findOne({
+      where: { sku_code: standardizedSKU },
+    });
+    if (existingSku) {
+      return res.status(400).json({
+        success: false,
+        message: `SKU '${standardizedSKU}' pehle se maujud hai (${
+          existingSku.is_active ? "Active" : "Inactive"
+        }).`,
+      });
+    }
+
+    const duplicateProduct = await db.Product.findOne({
+      where: { name: cleanName }, // Color check hata diya kyunki ab Color StockLevel par hai
+    });
+
+    if (duplicateProduct) {
+      return res.status(400).json({
+        success: false,
+        message: "Yeh Product Name pehle se database mein hai.",
+      });
+    }
+
+    // 3. Create Product
+    const product = await db.Product.create({
+      sku_code: standardizedSKU,
+      name: cleanName,
+      hsn_code: hsn_code ? hsn_code.trim() : null,
+      category: category ? category.trim() : null,
+      unit: unit || "pcs",
+      min_stock_level: min_stock_level || 5,
+      max_stock_level: max_stock_level || 1000,
+      is_active: true,
+    });
+
+    // 4. Pivot Table mein Manufacturers Map Karein
+    if (
+      manufacturer_ids &&
+      Array.isArray(manufacturer_ids) &&
+      manufacturer_ids.length > 0
+    ) {
+      await product.setManufacturers(manufacturer_ids);
+    }
+
+    return res.status(201).json({ success: true, data: product });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const bulkCreateProducts = async (req, res) => {
+  const t = await db.sequelize.transaction();
+
+  try {
+    const { products } = req.body;
+
+    if (!Array.isArray(products) || products.length === 0) {
+      await t.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Products ka array required hai.",
+      });
+    }
+
+    const createdProducts = [];
+    const payloadSkus = new Set();
+
+    for (const [index, item] of products.entries()) {
+      const {
+        sku_code,
+        name,
+        hsn_code,
+        manufacturer_ids,
+        category,
+        unit,
+        min_stock_level,
+        max_stock_level,
+      } = item;
+
+      if (!sku_code || !name) {
+        throw new Error(
+          `Row ${index + 1}: SKU Code aur Product Name mandatory hain.`,
+        );
+      }
+
+      const standardizedSKU = sku_code.trim().toUpperCase();
+      const cleanName = name.trim();
+
+      if (payloadSkus.has(standardizedSKU)) {
+        throw new Error(
+          `Row ${index + 1}: Duplicate SKU '${standardizedSKU}' aapki file mein ek se zyada baar hai.`,
+        );
+      }
+      payloadSkus.add(standardizedSKU);
+
+      const existingSku = await db.Product.findOne({
+        where: { sku_code: standardizedSKU },
+        transaction: t,
+      });
+      if (existingSku) {
+        throw new Error(
+          `Row ${index + 1}: SKU '${standardizedSKU}' database mein pehle se maujud hai.`,
+        );
+      }
+
+      const duplicateProduct = await db.Product.findOne({
+        where: { name: cleanName },
+        transaction: t,
+      });
+      if (duplicateProduct) {
+        throw new Error(
+          `Row ${index + 1}: '${cleanName}' pehle se database mein hai.`,
+        );
+      }
+
+      const product = await db.Product.create(
+        {
+          sku_code: standardizedSKU,
+          name: cleanName,
+          hsn_code: hsn_code ? hsn_code.trim() : null,
+          category: category ? category.trim() : null,
+          unit: unit || "pcs",
+          min_stock_level: min_stock_level || 5,
+          max_stock_level: max_stock_level || 1000,
+          is_active: true,
+        },
+        { transaction: t },
+      );
+
+      if (
+        manufacturer_ids &&
+        Array.isArray(manufacturer_ids) &&
+        manufacturer_ids.length > 0
+      ) {
+        await product.setManufacturers(manufacturer_ids, { transaction: t });
+      }
+
+      createdProducts.push(product);
+    }
+
+    await t.commit();
+    return res.status(201).json({
+      success: true,
+      message: `${createdProducts.length} products successfully add ho gaye.`,
+    });
+  } catch (error) {
+    if (t) await t.rollback();
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+const getAllProducts = async (req, res) => {
+  try {
+    const { status } = req.query;
+    let where = {};
+    if (status === "active") where.is_active = true;
+    if (status === "inactive") where.is_active = false;
+
+    const products = await db.Product.findAll({
+      where,
+      include: [
+        {
+          model: db.Partner,
+          as: "manufacturers",
+          attributes: ["id", "name"],
+          through: { attributes: [] },
+        },
+      ],
+    });
+    return res
+      .status(200)
+      .json({ success: true, count: products.length, products });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const updateProduct = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { manufacturer_ids, ...updateData } = req.body;
+
+    const product = await db.Product.findByPk(id);
+    if (!product) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Product not found." });
+    }
+
+    if (updateData.is_active === false && product.is_active === true) {
+      const totalStock = await db.StockLevel.sum("current_quantity", {
+        where: { ProductId: id },
+      });
+
+      if (totalStock > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Is product ka ${totalStock} unit stock abhi warehouses mein bacha hai. Ise Inactive nahi kiya ja sakta.`,
+        });
+      }
+    }
+
+    const stringFields = ["name", "category", "unit", "hsn_code"];
+    stringFields.forEach((field) => {
+      if (updateData[field]) updateData[field] = updateData[field].trim();
+    });
+
+    await product.update(updateData);
+
+    if (manufacturer_ids && Array.isArray(manufacturer_ids)) {
+      await product.setManufacturers(manufacturer_ids);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Product updated successfully.",
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// 2. STOCK MOVEMENT (Transactions & Core Inventory)
+
 const processStockMovement = async (req, res) => {
   const t = await db.sequelize.transaction();
 
@@ -14,7 +262,8 @@ const processStockMovement = async (req, res) => {
       productId,
       warehouseId,
       partner_id,
-      manufacturer_id, // ✅ IMPROVEMENT: Added manufacturer_id for tracking
+      manufacturer_id,
+      color,
       quantity,
       unit_price,
       type,
@@ -24,7 +273,6 @@ const processStockMovement = async (req, res) => {
     } = req.body;
     const userId = req.user.id;
 
-    // Validation
     if (!productId || !warehouseId || quantity === undefined || !type) {
       await t.rollback();
       return res
@@ -40,7 +288,6 @@ const processStockMovement = async (req, res) => {
         .json({ success: false, message: "Quantity must be a number." });
     }
 
-    // Product & Warehouse check
     const [product, warehouse] = await Promise.all([
       db.Product.findByPk(productId),
       db.Warehouse.findByPk(warehouseId),
@@ -54,9 +301,13 @@ const processStockMovement = async (req, res) => {
       });
     }
 
-    // Atomic Stock Update with Row Locking
     const [stockRecord] = await db.StockLevel.findOrCreate({
-      where: { ProductId: productId, WarehouseId: warehouseId },
+      where: {
+        ProductId: productId,
+        WarehouseId: warehouseId,
+        manufacturer_id: manufacturer_id || null,
+        color: color || "Standard",
+      },
       defaults: { current_quantity: 0 },
       transaction: t,
       lock: t.LOCK.UPDATE,
@@ -66,7 +317,6 @@ const processStockMovement = async (req, res) => {
     let newQuantity;
     const absQty = Math.abs(moveQty);
 
-    // Business Logic based on type
     switch (type.toUpperCase()) {
       case "INWARD":
       case "RETURN":
@@ -84,7 +334,7 @@ const processStockMovement = async (req, res) => {
         newQuantity = currentQty - absQty;
         break;
       case "ADJUSTMENT":
-        newQuantity = currentQty + moveQty; // Can be + or -
+        newQuantity = currentQty + moveQty;
         if (newQuantity < 0) {
           await t.rollback();
           return res.status(400).json({
@@ -100,14 +350,14 @@ const processStockMovement = async (req, res) => {
           .json({ success: false, message: "Invalid transaction type." });
     }
 
-    // Create Log and Update Level
     const transactionLog = await db.StockTransaction.create(
       {
         date: date || new Date(),
         ProductId: productId,
         WarehouseId: warehouseId,
         partner_id,
-        manufacturer_id, // ✅ IMPROVEMENT: Saves manufacturer info
+        manufacturer_id,
+        color: color || "Standard",
         type: type.toUpperCase(),
         quantity: moveQty,
         unit_price: unit_price || 0,
@@ -119,7 +369,6 @@ const processStockMovement = async (req, res) => {
       { transaction: t },
     );
 
-    // Update Stock Level
     await stockRecord.update(
       {
         current_quantity: newQuantity,
@@ -136,9 +385,6 @@ const processStockMovement = async (req, res) => {
   }
 };
 
-/**
- * 2. UPDATE EXISTING STOCK MOVEMENT (Reversal Logic)
- */
 const updateStockMovement = async (req, res) => {
   const { id } = req.params;
   const { quantity: newQty, type: newType, remarks } = req.body;
@@ -157,21 +403,32 @@ const updateStockMovement = async (req, res) => {
     }
 
     const stockRecord = await db.StockLevel.findOne({
-      where: { ProductId: oldTx.ProductId, WarehouseId: oldTx.WarehouseId },
+      where: {
+        ProductId: oldTx.ProductId,
+        WarehouseId: oldTx.WarehouseId,
+        manufacturer_id: oldTx.manufacturer_id,
+        color: oldTx.color,
+      },
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
 
+    if (!stockRecord) {
+      await t.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Corresponding Stock Level not found.",
+      });
+    }
+
     let currentQty = Number(stockRecord.current_quantity);
 
-    // Step A: Reverse old impact
     if (["INWARD", "RETURN", "ADJUSTMENT"].includes(oldTx.type)) {
       currentQty -= Number(oldTx.quantity);
     } else {
       currentQty += Number(oldTx.quantity);
     }
 
-    // Step B: Apply new impact
     const finalType = (newType || oldTx.type).toUpperCase();
     const finalQty =
       newQty !== undefined ? Number(newQty) : Number(oldTx.quantity);
@@ -196,7 +453,6 @@ const updateStockMovement = async (req, res) => {
         .json({ success: false, message: "Update results in negative stock." });
     }
 
-    // Final Updates
     await oldTx.update(
       {
         quantity: finalQty,
@@ -225,9 +481,109 @@ const updateStockMovement = async (req, res) => {
   }
 };
 
-/**
- * 3. GET INVENTORY DASHBOARD
- */
+const bulkProcessStockMovement = async (req, res) => {
+  const t = await db.sequelize.transaction();
+  try {
+    const { movements } = req.body;
+
+    if (!Array.isArray(movements) || movements.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid data format." });
+    }
+
+    const processedTransactions = [];
+
+    for (const item of movements) {
+      const {
+        productId,
+        warehouseId,
+        quantity,
+        type,
+        batch_number,
+        reference_no,
+        partner_id,
+        manufacturer_id,
+        color,
+        unit_price,
+      } = item;
+
+      if (!productId || !warehouseId || !quantity || !type) {
+        throw new Error(`Invalid data for product ${productId}`);
+      }
+
+      let stockRecord = await db.StockLevel.findOne({
+        where: {
+          ProductId: productId,
+          WarehouseId: warehouseId,
+          manufacturer_id: manufacturer_id || null,
+          color: color || "Standard",
+        },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+
+      if (!stockRecord) {
+        stockRecord = await db.StockLevel.create(
+          {
+            ProductId: productId,
+            WarehouseId: warehouseId,
+            manufacturer_id: manufacturer_id || null,
+            color: color || "Standard",
+            current_quantity: 0,
+          },
+          { transaction: t },
+        );
+      }
+
+      let currentQty = Number(stockRecord.current_quantity);
+      const moveQty = Number(quantity);
+      const absQty = Math.abs(moveQty);
+
+      if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type.toUpperCase())) {
+        currentQty += moveQty;
+      } else {
+        if (currentQty < absQty) {
+          throw new Error(`Insufficient stock for Product ID: ${productId}`);
+        }
+        currentQty -= absQty;
+      }
+
+      await stockRecord.update(
+        { current_quantity: currentQty },
+        { transaction: t },
+      );
+
+      processedTransactions.push({
+        ProductId: productId,
+        WarehouseId: warehouseId,
+        partner_id,
+        manufacturer_id,
+        color: color || "Standard",
+        type: type.toUpperCase(),
+        quantity: moveQty,
+        unit_price: unit_price || 0,
+        batch_number,
+        reference_no,
+        created_by: req.user.id,
+      });
+    }
+
+    await db.StockTransaction.bulkCreate(processedTransactions, {
+      transaction: t,
+    });
+    await t.commit();
+    return res
+      .status(201)
+      .json({ success: true, message: "Bulk stock updated successfully." });
+  } catch (error) {
+    await t.rollback();
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+//  3. DASHBOARDS & REPORTING
+
 const getInventoryDashboard = async (req, res) => {
   try {
     const stockStatus = await db.StockLevel.findAll({
@@ -255,106 +611,6 @@ const getInventoryDashboard = async (req, res) => {
   }
 };
 
-/**
- * 4. BULK PROCESS STOCK MOVEMENT
- */
-const bulkProcessStockMovement = async (req, res) => {
-  const t = await db.sequelize.transaction();
-  try {
-    const { movements } = req.body;
-
-    if (!Array.isArray(movements) || movements.length === 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid data format." });
-    }
-
-    const processedTransactions = [];
-
-    for (const item of movements) {
-      const {
-        productId,
-        warehouseId,
-        quantity,
-        type,
-        batch_number,
-        reference_no,
-        partner_id,
-        manufacturer_id, // ✅ IMPROVEMENT: Extract manufacturer_id
-        unit_price,
-      } = item;
-
-      if (!productId || !warehouseId || !quantity || !type) {
-        throw new Error(`Invalid data for product ${productId}`);
-      }
-
-      let stockRecord = await db.StockLevel.findOne({
-        where: { ProductId: productId, WarehouseId: warehouseId },
-        lock: t.LOCK.UPDATE,
-        transaction: t,
-      });
-
-      if (!stockRecord) {
-        stockRecord = await db.StockLevel.create(
-          {
-            ProductId: productId,
-            WarehouseId: warehouseId,
-            current_quantity: 0,
-          },
-          { transaction: t },
-        );
-      }
-
-      let currentQty = Number(stockRecord.current_quantity);
-      const moveQty = Number(quantity);
-      const absQty = Math.abs(moveQty); // ✅ IMPROVEMENT: Added Math.abs for safety
-
-      if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type.toUpperCase())) {
-        currentQty += moveQty;
-      } else {
-        if (currentQty < absQty) {
-          // ✅ IMPROVEMENT: Used absQty to prevent bugs
-          throw new Error(`Insufficient stock for Product ID: ${productId}`);
-        }
-        currentQty -= absQty; // ✅ IMPROVEMENT: Used absQty
-      }
-
-      await stockRecord.update(
-        { current_quantity: currentQty },
-        { transaction: t },
-      );
-
-      processedTransactions.push({
-        ProductId: productId,
-        WarehouseId: warehouseId,
-        partner_id,
-        manufacturer_id, // ✅ IMPROVEMENT: Push to bulk create array
-        type: type.toUpperCase(),
-        quantity: moveQty,
-        unit_price: unit_price || 0,
-        batch_number,
-        reference_no,
-        created_by: req.user.id,
-      });
-    }
-
-    await db.StockTransaction.bulkCreate(processedTransactions, {
-      transaction: t,
-    });
-
-    await t.commit();
-    return res
-      .status(201)
-      .json({ success: true, message: "Bulk stock updated successfully." });
-  } catch (error) {
-    await t.rollback();
-    return res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-/**
- * 5. GET TRANSACTION HISTORY
- */
 const getTransactionHistory = async (req, res) => {
   try {
     const {
@@ -384,7 +640,6 @@ const getTransactionHistory = async (req, res) => {
       include: [
         { model: db.Product, attributes: ["name", "sku_code"] },
         { model: db.Warehouse, attributes: ["name"] },
-        // ✅ IMPROVEMENT: Added Partner includes so frontend can show who supplied/manufactured
         { model: db.Partner, as: "partner", attributes: ["id", "name"] },
         {
           model: db.Partner,
@@ -409,11 +664,21 @@ const getTransactionHistory = async (req, res) => {
   }
 };
 
-// 6. ALL EXPORTS ADDED HERE
+// EXPORTS
+
 module.exports = {
+  // Product Management
+  createProduct,
+  bulkCreateProducts,
+  getAllProducts,
+  updateProduct,
+
+  // Stock Movement
   processStockMovement,
   updateStockMovement,
-  getInventoryDashboard,
   bulkProcessStockMovement,
+
+  // Reports
+  getInventoryDashboard,
   getTransactionHistory,
 };

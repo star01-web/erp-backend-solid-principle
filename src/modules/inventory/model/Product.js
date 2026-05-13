@@ -17,11 +17,8 @@ const Product = sequelize.define(
     name: { type: DataTypes.STRING, allowNull: false },
 
     // --- Product Attributes ---
-    color: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: "Product ka rang (e.g., Red, Blue, #FF0000)",
-    },
+    // Color yahan se hata diya gaya hai. Ab yeh StockTransaction aur StockLevel mein jayega.
+
     description: { type: DataTypes.TEXT },
     hsn_code: { type: DataTypes.STRING }, // Tax Compliance
 
@@ -46,7 +43,7 @@ const Product = sequelize.define(
     paranoid: true,
     indexes: [
       { fields: ["sku_code"] },
-      { fields: ["color"] }, // Color ke base par filter karne ke liye fast search
+      // Color ka index bhi hata diya gaya hai
     ],
   },
 );
