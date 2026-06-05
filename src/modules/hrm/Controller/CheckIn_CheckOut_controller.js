@@ -293,19 +293,30 @@ const getTeamMembers = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server Error" });
   }
 };
-
+const momentTz = require("moment-timezone");
 const getAttendanceData = async (req, res) => {
   try {
     // Frontend se start aur end date aayegi toh filter zyada accurate hoga
     const { startDate, endDate } = req.query;
 
-    const now = new Date();
-    const start = startDate
-      ? new Date(startDate)
-      : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const end = endDate
-      ? new Date(endDate)
-      : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    // Timezone ko Asia/Kolkata (IST) par set kiya
+    const tz = "Asia/Kolkata";
+
+    let start, end;
+
+    if (startDate) {
+      start = momentTz.tz(startDate, tz).startOf("day").toDate();
+    } else {
+      // Agar date nahi hai toh current month ki starting (1st date, 00:00:00)
+      start = momentTz.tz(tz).startOf("month").toDate();
+    }
+
+    if (endDate) {
+      end = momentTz.tz(endDate, tz).endOf("day").toDate();
+    } else {
+      // Current month ki ending (Last date, 23:59:59)
+      end = momentTz.tz(tz).endOf("month").toDate();
+    }
 
     const loggedInUserId = req.user.id;
     const loggedInUserRole = req.user.role ? req.user.role.toUpperCase() : "";
@@ -345,8 +356,7 @@ const getAttendanceData = async (req, res) => {
       };
     }
 
-    // --- OPTIMIZED DATA FETCHING ---
-    // Ek hi baar mein CheckIn aur CheckOut dono nikal rahe hain
+    // --- DATA FETCHING ---
     const attendanceRecords = await db.CheckIn.findAll({
       where: whereCondition,
       include: [
@@ -368,35 +378,32 @@ const getAttendanceData = async (req, res) => {
       },
     });
 
+    // --- HELPER FUNCTION FOR TIME ---
     const toIST = (dateObj) => {
       if (!dateObj) return "--:--";
-      return new Date(dateObj)
-        .toLocaleTimeString("en-IN", {
-          timeZone: "Asia/Kolkata",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: true,
-        })
-        .toUpperCase();
+      // momentTz ka use karke output nikal rahe hain
+      return momentTz(dateObj).tz(tz).format("hh:mm A");
     };
 
-    // Data mapping
+    // --- DATA MAPPING ---
     const detailedReport = attendanceRecords.map((checkIn) => {
-      // Memory mein filter kar rahe hain database ki jagah
+      // IST ke basis par dono ki date string nikal rahe hain
+      const checkInDateStr = momentTz(checkIn.checkInTime)
+        .tz(tz)
+        .format("YYYY-MM-DD");
+
       const checkOut = checkOuts.find(
         (co) =>
           co.employeeId === checkIn.employeeId &&
-          new Date(co.checkOutTime).toDateString() ===
-            new Date(checkIn.checkInTime).toDateString(),
+          momentTz(co.checkOutTime).tz(tz).format("YYYY-MM-DD") ===
+            checkInDateStr,
       );
 
       return {
         id: checkIn.id,
         name: checkIn.employee?.name || "N/A",
         empId: checkIn.employee?.emp_code || "N/A",
-        date: new Date(checkIn.checkInTime)
-          .toLocaleDateString("en-GB")
-          .replace(/\//g, "-"),
+        date: momentTz(checkIn.checkInTime).tz(tz).format("DD-MM-YYYY"),
         checkIn: toIST(checkIn.checkInTime),
         checkOut: toIST(checkOut?.checkOutTime),
         totalHours: checkOut?.working_hours || "0h",
@@ -416,6 +423,8 @@ const getAttendanceData = async (req, res) => {
       .json({ success: false, message: "Internal Server Error" });
   }
 };
+
+// module.exports me baki functions ke sath ise export kar lein
 
 const getAllAttendanceData = async (req, res) => {
   try {
