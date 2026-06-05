@@ -1,8 +1,9 @@
 const db = require("../../../common/index.db");
 const { Op } = require("sequelize");
 const axios = require("axios");
-const moment = require("moment");
-// helper function : Distance  checker
+const momentTz = require("moment-timezone"); // Uniform name use kar rahe hain poori file me
+
+// Helper function : Distance checker (Haversine formula)
 const getDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371e3; // Earth's radius in meters
   const φ1 = (lat1 * Math.PI) / 180;
@@ -17,6 +18,7 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
 
   return R * c; // Distance in meters
 };
+
 // Helper function: Lat/Log se Address nikalne ke liye
 const getAddressFromOSM = async (lat, lon) => {
   try {
@@ -26,16 +28,12 @@ const getAddressFromOSM = async (lat, lon) => {
       headers: {
         "User-Agent": "StarERP_HRM_System",
       },
-      timeout: 5000, // 5 seconds ka timeout (Zaroori hai)
+      timeout: 5000,
     });
 
-    // Pura address return karne ke bajaye aap thoda saaf address bhi nikal sakte hain
     return response.data.display_name || `Lat: ${lat}, Lon: ${lon}`;
   } catch (error) {
-    // Agar internet slow ho ya OSM down ho, toh server ko crash mat hone do
     console.error("❌ OSM Fetch Error:", error.message);
-
-    // Fallback: Address ki jagah coordinates bhej do taaki attendance ruk na jaye
     return `Coordinates: ${lat}, ${lon}`;
   }
 };
@@ -59,9 +57,9 @@ const handleCheckIn = async (req, res) => {
         ? employee_ids
         : [requesterEmpId];
 
-    // 1. Check if already checked in today
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    // 1. Check if already checked in today (IST safe check)
+    const tz = "Asia/Kolkata";
+    const startOfDay = momentTz.tz(tz).startOf("day").toDate();
 
     const alreadyCheckedIn = await db.CheckIn.findAll({
       where: {
@@ -83,11 +81,8 @@ const handleCheckIn = async (req, res) => {
     }
 
     // --- 2. GEOFENCING LOGIC (Multiple Offices) ---
-
-    // Saare active offices fetch karein
     const allOffices = await db.OfficeLocation.findAll();
 
-    // Check karein ki user kisi bhi ek office ke radius mein hai ya nahi
     const matchedOffice = allOffices.find((office) => {
       const distance = getDistance(
         latitude,
@@ -109,7 +104,6 @@ const handleCheckIn = async (req, res) => {
         position.includes("driver") ||
         position.includes("field");
 
-      // Agar office ke bahar hai AUR field staff bhi nahi hai, toh block karein
       if (!matchedOffice && !isFieldStaff) {
         return res.status(403).json({
           message: `${emp.name} kisi bhi office location ke dayre mein nahi hain.`,
@@ -128,7 +122,7 @@ const handleCheckIn = async (req, res) => {
       longitude,
       address: finalAddress,
       marked_by: requesterEmpId,
-      office_id: matchedOffice ? matchedOffice.id : null, // Optional: Track which office
+      office_id: matchedOffice ? matchedOffice.id : null,
     }));
 
     const records = await db.CheckIn.bulkCreate(checkInDataArray);
@@ -150,7 +144,6 @@ const handleCheckOut = async (req, res) => {
   try {
     const { employee_ids, latitude, longitude } = req.body;
 
-    // 1. Auth Check
     if (!req.user?.id)
       return res.status(401).json({ message: "Unauthorized." });
 
@@ -166,7 +159,6 @@ const handleCheckOut = async (req, res) => {
         ? employee_ids
         : [requesterEmpId];
 
-    // 2. Fetch Data (Offices, Employees, and Address) in Parallel
     const [allOffices, employees, finalAddress] = await Promise.all([
       db.OfficeLocation.findAll(),
       db.EmployeeMaster.findAll({
@@ -175,8 +167,6 @@ const handleCheckOut = async (req, res) => {
       getAddressFromOSM(latitude, longitude),
     ]);
 
-    // --- 3. GEOFENCING VALIDATION (Multiple Offices) ---
-    // Check if current location matches ANY office
     const matchedOffice = allOffices.find((office) => {
       const distance = getDistance(
         latitude,
@@ -192,7 +182,6 @@ const handleCheckOut = async (req, res) => {
       const isFieldStaff =
         position.includes("sales") || position.includes("driver");
 
-      // Agar user office ke bahar hai aur field staff bhi nahi hai, toh block karein
       if (!matchedOffice && !isFieldStaff) {
         return res.status(403).json({
           message: `${emp.name} kisi bhi authorized office location ke dayre mein nahi hain (Check-out blocked).`,
@@ -200,10 +189,9 @@ const handleCheckOut = async (req, res) => {
       }
     }
 
-    // 4. Today's Transactions Fetch
     const now = new Date();
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const tz = "Asia/Kolkata";
+    const todayStart = momentTz.tz(tz).startOf("day").toDate();
 
     const [allCheckIns, allCheckOuts] = await Promise.all([
       db.CheckIn.findAll({
@@ -221,7 +209,6 @@ const handleCheckOut = async (req, res) => {
       }),
     ]);
 
-    // 5. Build Check-Out Data
     const checkOutDataArray = [];
 
     targetEmployeeIds.forEach((empId) => {
@@ -241,7 +228,7 @@ const handleCheckOut = async (req, res) => {
           longitude,
           address: finalAddress,
           marked_by: requesterEmpId,
-          working_hours: hoursCalculated,
+          working_hours: hoursCalculated >= 0 ? hoursCalculated : 0,
           office_id: matchedOffice ? matchedOffice.id : null,
         });
       }
@@ -254,7 +241,6 @@ const handleCheckOut = async (req, res) => {
       });
     }
 
-    // 6. Bulk Create
     const records = await db.CheckOut.bulkCreate(checkOutDataArray);
 
     return res.status(201).json({
@@ -271,14 +257,12 @@ const handleCheckOut = async (req, res) => {
 
 const getTeamMembers = async (req, res) => {
   try {
-    // Aapke login data se 'hrm_employee_id' mil rahi hai
-    // Ensure karein ki aapka auth middleware req.user mein 'hrm_employee_id' bhej raha hai
     const supervisorId = req.user.hrm_employee_id;
 
     console.log("🔍 Fetching team for Supervisor ID:", supervisorId);
 
     const teamMembers = await db.EmployeeMaster.findAll({
-      where: { supervisor_id: supervisorId }, // ✅ Yeh link perfect hai
+      where: { supervisor_id: supervisorId },
       attributes: ["id", "emp_code", "name", "phone", "email", "position"],
       order: [["name", "ASC"]],
     });
@@ -293,13 +277,10 @@ const getTeamMembers = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server Error" });
   }
 };
-const momentTz = require("moment-timezone");
+
 const getAttendanceData = async (req, res) => {
   try {
-    // Frontend se start aur end date aayegi toh filter zyada accurate hoga
     const { startDate, endDate } = req.query;
-
-    // Timezone ko Asia/Kolkata (IST) par set kiya
     const tz = "Asia/Kolkata";
 
     let start, end;
@@ -307,14 +288,12 @@ const getAttendanceData = async (req, res) => {
     if (startDate) {
       start = momentTz.tz(startDate, tz).startOf("day").toDate();
     } else {
-      // Agar date nahi hai toh current month ki starting (1st date, 00:00:00)
       start = momentTz.tz(tz).startOf("month").toDate();
     }
 
     if (endDate) {
       end = momentTz.tz(endDate, tz).endOf("day").toDate();
     } else {
-      // Current month ki ending (Last date, 23:59:59)
       end = momentTz.tz(tz).endOf("month").toDate();
     }
 
@@ -335,7 +314,6 @@ const getAttendanceData = async (req, res) => {
       ? requesterProfile.department.toUpperCase()
       : "";
 
-    // --- TEAM LOGIC ---
     const isPrivilegedUser =
       loggedInUserRole === "ADMIN" ||
       userDept === "HR" ||
@@ -356,7 +334,6 @@ const getAttendanceData = async (req, res) => {
       };
     }
 
-    // --- DATA FETCHING ---
     const attendanceRecords = await db.CheckIn.findAll({
       where: whereCondition,
       include: [
@@ -369,7 +346,6 @@ const getAttendanceData = async (req, res) => {
       order: [["checkInTime", "DESC"]],
     });
 
-    // Saare CheckOuts ek hi query mein (N+1 fix)
     const employeeIds = attendanceRecords.map((r) => r.employeeId);
     const checkOuts = await db.CheckOut.findAll({
       where: {
@@ -378,35 +354,34 @@ const getAttendanceData = async (req, res) => {
       },
     });
 
-    // --- HELPER FUNCTION FOR TIME ---
     const toIST = (dateObj) => {
       if (!dateObj) return "--:--";
-      // momentTz ka use karke output nikal rahe hain
-      return momentTz(dateObj).tz(tz).format("hh:mm A");
+      return momentTz.utc(dateObj).format("hh:mm A");
     };
 
-    // --- DATA MAPPING ---
     const detailedReport = attendanceRecords.map((checkIn) => {
-      // IST ke basis par dono ki date string nikal rahe hain
-      const checkInDateStr = momentTz(checkIn.checkInTime)
-        .tz(tz)
+      const checkInDateStr = momentTz
+        .utc(checkIn.checkInTime)
         .format("YYYY-MM-DD");
 
       const checkOut = checkOuts.find(
         (co) =>
           co.employeeId === checkIn.employeeId &&
-          momentTz(co.checkOutTime).tz(tz).format("YYYY-MM-DD") ===
-            checkInDateStr,
+          momentTz.utc(co.checkOutTime).format("YYYY-MM-DD") === checkInDateStr,
       );
 
       return {
         id: checkIn.id,
         name: checkIn.employee?.name || "N/A",
         empId: checkIn.employee?.emp_code || "N/A",
-        date: momentTz(checkIn.checkInTime).tz(tz).format("DD-MM-YYYY"),
+        date: momentTz.utc(checkIn.checkInTime).format("DD-MM-YYYY"),
         checkIn: toIST(checkIn.checkInTime),
         checkOut: toIST(checkOut?.checkOutTime),
-        totalHours: checkOut?.working_hours || "0h",
+        totalHours:
+          checkOut?.working_hours &&
+          !checkOut.working_hours.toString().startsWith("-")
+            ? checkOut.working_hours
+            : "0h",
         status: checkOut ? "Completed" : "Working",
       };
     });
@@ -424,27 +399,21 @@ const getAttendanceData = async (req, res) => {
   }
 };
 
-// module.exports me baki functions ke sath ise export kar lein
-
 const getAllAttendanceData = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-
+    const tz = "Asia/Kolkata";
     let checkInWhere = {};
     let checkOutWhere = {};
 
-    // ✅ Date filter fix: String format use kar rahe hain taaki timezone shift na ho
     if (startDate && endDate) {
-      const start = moment(startDate)
-        .startOf("day")
-        .format("YYYY-MM-DD HH:mm:ss");
-      const end = moment(endDate).endOf("day").format("YYYY-MM-DD HH:mm:ss");
+      const start = momentTz.tz(startDate, tz).startOf("day").toDate();
+      const end = momentTz.tz(endDate, tz).endOf("day").toDate();
 
       checkInWhere.checkInTime = { [Op.between]: [start, end] };
       checkOutWhere.checkOutTime = { [Op.between]: [start, end] };
     }
 
-    // ✅ Fetch Employees + Attendance
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code"],
       include: [
@@ -472,10 +441,9 @@ const getAllAttendanceData = async (req, res) => {
       const checkins = emp.checkins || [];
       const checkouts = emp.checkouts || [];
 
-      // Case 1: Agar koi Check-in nahi mila (Absent)
       if (checkins.length === 0) {
         finalReport.push({
-          date: startDate || moment().format("YYYY-MM-DD"),
+          date: startDate || momentTz.tz(tz).format("YYYY-MM-DD"),
           empName: emp.name,
           empCode: emp.emp_code,
           location: "N/A",
@@ -486,14 +454,15 @@ const getAllAttendanceData = async (req, res) => {
           workDone: "No Activity",
         });
       } else {
-        // Case 2: Check-ins maujood hain
         checkins.forEach((checkin) => {
-          // Timezone safe comparison using format
-          const checkInDate = moment(checkin.checkInTime).format("YYYY-MM-DD");
+          const checkInDate = momentTz
+            .utc(checkin.checkInTime)
+            .format("YYYY-MM-DD");
 
           const checkout = checkouts.find(
             (co) =>
-              moment(co.checkOutTime).format("YYYY-MM-DD") === checkInDate,
+              momentTz.utc(co.checkOutTime).format("YYYY-MM-DD") ===
+              checkInDate,
           );
 
           let status = "Short Attendance";
@@ -503,24 +472,27 @@ const getAllAttendanceData = async (req, res) => {
 
           if (checkout) {
             status = "Present";
-            checkOutTimeStr = moment(checkout.checkOutTime).format("hh:mm A");
+            checkOutTimeStr = momentTz
+              .utc(checkout.checkOutTime)
+              .format("hh:mm A");
             workDoneStr = checkout.address || "N/A";
 
-            // Calculation
-            const duration = moment.duration(
-              moment(checkout.checkOutTime).diff(moment(checkin.checkInTime)),
+            const duration = momentTz.duration(
+              momentTz
+                .utc(checkout.checkOutTime)
+                .diff(momentTz.utc(checkin.checkInTime)),
             );
             const hours = Math.floor(duration.asHours());
             const minutes = duration.minutes();
-            workingHours = `${hours}h ${minutes}m`;
+            workingHours = hours >= 0 ? `${hours}h ${minutes}m` : "0h 0m";
           }
 
           finalReport.push({
-            date: checkInDate,
+            date: momentTz.utc(checkin.checkInTime).format("DD-MM-YYYY"),
             empName: emp.name,
             empCode: emp.emp_code,
             location: checkin.address || "N/A",
-            checkIn: moment(checkin.checkInTime).format("hh:mm A"),
+            checkIn: momentTz.utc(checkin.checkInTime).format("hh:mm A"),
             checkOut: checkOutTimeStr,
             status: status,
             workingHours: workingHours,
@@ -530,26 +502,22 @@ const getAllAttendanceData = async (req, res) => {
       }
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: finalReport.length,
       attendance: finalReport,
     });
   } catch (error) {
     console.error("❌ Attendance Error:", error);
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 const getFilteredAttendance = async (req, res) => {
   try {
-    // Frontend se params lena: ?startDate=2024-01-01&endDate=2024-01-10&employeeId=12
     const { startDate, endDate, employeeId } = req.query;
+    const tz = "Asia/Kolkata";
 
-    // 1. Date Validation & Formatting
     if (!startDate || !endDate) {
       return res.status(400).json({
         success: false,
@@ -557,13 +525,9 @@ const getFilteredAttendance = async (req, res) => {
       });
     }
 
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
+    const start = momentTz.tz(startDate, tz).startOf("day").toDate();
+    const end = momentTz.tz(endDate, tz).endOf("day").toDate();
 
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-
-    // 2. User Permission Check (Token se)
     const loggedInUserRole = req.user.role ? req.user.role.toUpperCase() : "";
     const loggedInUserId = req.user.id;
 
@@ -576,20 +540,16 @@ const getFilteredAttendance = async (req, res) => {
       ["ADMIN", "HR", "ACCOUNTS"].includes(loggedInUserRole) ||
       ["HR", "ACCOUNTS"].includes(userDept);
 
-    // 3. Query Condition Build Karna
     const whereCondition = {
       checkInTime: { [Op.between]: [start, end] },
     };
 
-    // Agar Admin nahi hai, toh wo sirf apna data filter kar sakta hai
     if (!isPrivileged) {
       whereCondition.employeeId = requester.id;
     } else if (employeeId) {
-      // Admin kisi bhi specific employee ka data filter kar sakta hai
       whereCondition.employeeId = employeeId;
     }
 
-    // 4. Data Fetching
     const records = await db.CheckIn.findAll({
       where: whereCondition,
       include: [
@@ -599,36 +559,46 @@ const getFilteredAttendance = async (req, res) => {
           attributes: ["name", "emp_code", "department"],
         },
       ],
-      order: [["checkInTime", "ASC"]], // Filtered data purane se naye ki taraf (ASC)
+      order: [["checkInTime", "ASC"]],
     });
 
-    // 5. Check-Out Data Merge Logic
-    const report = await Promise.all(
-      records.map(async (checkIn) => {
-        const checkOut = await db.CheckOut.findOne({
-          where: {
-            employeeId: checkIn.employeeId,
-            checkOutTime: {
-              [Op.between]: [
-                new Date(checkIn.checkInTime).setHours(0, 0, 0, 0),
-                new Date(checkIn.checkInTime).setHours(23, 59, 59, 999),
-              ],
-            },
-          },
-        });
+    // FIXED N+1 QUERY OPTIMIZATION HERE
+    const employeeIds = records.map((r) => r.employeeId);
+    const checkOuts = await db.CheckOut.findAll({
+      where: {
+        employeeId: { [Op.in]: employeeIds },
+        checkOutTime: { [Op.between]: [start, end] },
+      },
+    });
 
-        return {
-          id: checkIn.id,
-          name: checkIn.employee?.name,
-          empId: checkIn.employee?.emp_code,
-          date: new Date(checkIn.checkInTime).toISOString().split("T")[0],
-          checkIn: checkIn.checkInTime,
-          checkOut: checkOut?.checkOutTime || null,
-          totalHours: checkOut?.working_hours || "0h",
-          status: checkOut ? "Completed" : "In-Progress",
-        };
-      }),
-    );
+    const report = records.map((checkIn) => {
+      const checkInDateStr = momentTz
+        .utc(checkIn.checkInTime)
+        .format("YYYY-MM-DD");
+
+      const checkOut = checkOuts.find(
+        (co) =>
+          co.employeeId === checkIn.employeeId &&
+          momentTz.utc(co.checkOutTime).format("YYYY-MM-DD") === checkInDateStr,
+      );
+
+      return {
+        id: checkIn.id,
+        name: checkIn.employee?.name,
+        empId: checkIn.employee?.emp_code,
+        date: momentTz.utc(checkIn.checkInTime).format("DD-MM-YYYY"),
+        checkIn: momentTz.utc(checkIn.checkInTime).format("hh:mm A"),
+        checkOut: checkOut
+          ? momentTz.utc(checkOut.checkOutTime).format("hh:mm A")
+          : null,
+        totalHours:
+          checkOut?.working_hours &&
+          !checkOut.working_hours.toString().startsWith("-")
+            ? checkOut.working_hours
+            : "0h",
+        status: checkOut ? "Completed" : "In-Progress",
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -647,6 +617,7 @@ const getFilteredAttendance = async (req, res) => {
 const getMonthlyPayrollReport = async (req, res) => {
   try {
     const { month } = req.query; // format: 2026-03
+    const tz = "Asia/Kolkata";
 
     if (!month) {
       return res.status(400).json({
@@ -655,10 +626,9 @@ const getMonthlyPayrollReport = async (req, res) => {
       });
     }
 
-    const startDate = moment(month + "-01").startOf("month");
-    const endDate = moment(startDate).endOf("month");
+    const startDate = momentTz.tz(month + "-01", tz).startOf("month");
+    const endDate = momentTz.tz(startDate, tz).endOf("month");
 
-    // Fetch employees with checkins & checkouts for month
     const employees = await db.EmployeeMaster.findAll({
       attributes: ["id", "name", "emp_code", "monthly_wages"],
       include: [
@@ -689,7 +659,7 @@ const getMonthlyPayrollReport = async (req, res) => {
     const weekends = [];
 
     for (let d = 1; d <= totalDays; d++) {
-      const day = moment(`${month}-${d}`, "YYYY-MM-DD");
+      const day = momentTz.tz(`${month}-${d}`, "YYYY-MM-DD", tz);
       if (day.day() === 0 || day.day() === 6) {
         weekends.push(day.format("YYYY-MM-DD"));
       }
@@ -699,7 +669,7 @@ const getMonthlyPayrollReport = async (req, res) => {
       const presentDates = new Set();
 
       emp.checkins.forEach((c) => {
-        presentDates.add(moment(c.checkInTime).format("YYYY-MM-DD"));
+        presentDates.add(momentTz.utc(c.checkInTime).format("YYYY-MM-DD"));
       });
 
       const workingDays = totalDays - weekends.length;
