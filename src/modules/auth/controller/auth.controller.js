@@ -69,7 +69,7 @@ const login = async (req, res) => {
         hrm_employee_id: employeeProfile ? employeeProfile.id : null,
       },
       process.env.JWT_SECRET || "your_secret_key",
-      { expiresIn: "24h" },
+      { expiresIn: "30d" },
     );
 
     // --- TIMEZONE FIX FOR LOGIN TIME ---
@@ -94,8 +94,8 @@ const login = async (req, res) => {
       loginTime: loginTimeIST, // Ab ye frontend par sahi dikhega
     };
 
-    // 6. Cache Store
-    myCache.set(`auth_token:${user.id}`, token, 72000);
+    // 6. Cache Store (30 days = 30 * 24 * 60 * 60 = 2592000 seconds)
+    myCache.set(`auth_token:${user.id}`, token, 2592000);
 
     return res.json({
       success: true,
