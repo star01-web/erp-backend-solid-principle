@@ -3,10 +3,10 @@ const sequelize = require("./db.config");
 
 // Models Import
 const User = require("../modules/auth/models/user.model");
-const EmployeeMaster = require("../modules/hrm/model/EmployeeMaster");
-const CheckIn = require("../modules/hrm/model/CheckIn_model");
-const CheckOut = require("../modules/hrm/model/CheckOut_model");
-const OfficeLocation = require("../modules/hrm/model/Office_Location_model");
+const EmployeeMaster = require("../modules/hrm/models/EmployeeMaster");
+const CheckIn = require("../modules/hrm/models/CheckIn_model");
+const CheckOut = require("../modules/hrm/models/CheckOut_model");
+const OfficeLocation = require("../modules/hrm/models/Office_Location_model");
 const Product = require("../modules/inventory/model/Product");
 const Warehouse = require("../modules/inventory/model/Warehouse");
 const StockLevel = require("../modules/inventory/model/StockLevel");
@@ -62,11 +62,11 @@ db.EmployeeMaster.belongsTo(db.OfficeLocation, {
 
 // 4. User to EmployeeMaster (Login Mapping)
 db.User.hasOne(db.EmployeeMaster, {
-  foreignKey: "userId", // Check karein aapke DB mein 'userId' hai ya 'user_id'
+  foreignKey: "user_id", // model attribute 'user_id' -> column 'userId'
   as: "employeeProfile",
 });
 db.EmployeeMaster.belongsTo(db.User, {
-  foreignKey: "userId",
+  foreignKey: "user_id",
   as: "loginDetails",
 });
 

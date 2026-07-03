@@ -160,17 +160,9 @@ const togglePartnerStatus = async (req, res) => {
         .json({ success: false, message: "Partner nahi mila." });
     }
 
-    // Industrial Safety Check:
-    // Agar kisi Supplier se pending transactions hain, toh use inactive karne se pehle warn karein
-    if (partner.is_active) {
-      const hasTransactions = await db.StockTransaction.findOne({
-        where: { partner_id: id },
-      });
-
-      // Note: Industry mein sirf warning dete hain ya block karte hain.
-      // Filhal hum sirf status badal rahe hain kyunki transactions audit ke liye record rahengi.
-    }
-
+    // Note: We only flip status here. Past transactions stay on record for
+    // audit, so an inactive partner is deliberately not blocked from having
+    // historical stock movements.
     partner.is_active = !partner.is_active;
     await partner.save();
 

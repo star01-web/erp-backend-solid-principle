@@ -2,13 +2,13 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 
-const authRoutes = require("./modules/auth/route/auth.route");
-const userRoutes = require("./modules/auth/route/user.route");
-const CreateEmployee = require("./modules/hrm/Route/emp_route");
-const CreateOfficeLocation = require("./modules/hrm/Route/Office_Location_Route");
-const attendaceRow = require("./modules/hrm/Route/Checkin_CheckOut_Route");
+const authRoutes = require("./modules/auth/routes/auth.route");
+const userRoutes = require("./modules/auth/routes/user.route");
+const CreateEmployee = require("./modules/hrm/routes/employee.route");
+const CreateOfficeLocation = require("./modules/hrm/routes/officeLocation.route");
+const attendaceRow = require("./modules/hrm/routes/attendance.route");
 const internalAuth = require("./modules/auth/middleware/api.internalAuth");
-const exportRoutes = require("./modules/hrm/Route/ExportRoute");
+const exportRoutes = require("./modules/hrm/routes/export.route");
 const inventoryRoutes = require("./modules/inventory/Route/inventory.route");
 const app = express();
 

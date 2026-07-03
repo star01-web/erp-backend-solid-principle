@@ -258,9 +258,52 @@ const updateProduct = async (req, res) => {
   }
 };
 
+/**
+ * Toggle Product Status (Active/Inactive) — delete ki jagah use karein.
+ * Safety: Inactive karne se pehle check karta hai ki warehouses mein stock to nahi bacha.
+ */
+const toggleProductStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const product = await db.Product.findByPk(id);
+
+    if (!product) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Product not found." });
+    }
+
+    // Active -> Inactive karte waqt stock check
+    if (product.is_active) {
+      const totalStock = await db.StockLevel.sum("current_quantity", {
+        where: { ProductId: id },
+      });
+
+      if (totalStock > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Is product ka ${totalStock} unit stock abhi warehouses mein bacha hai. Ise Inactive nahi kiya ja sakta.`,
+        });
+      }
+    }
+
+    product.is_active = !product.is_active;
+    await product.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Product ab ${product.is_active ? "Active" : "Inactive"} hai.`,
+      data: product,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   createProduct,
   bulkCreateProducts,
   getAllProducts,
   updateProduct,
+  toggleProductStatus,
 };

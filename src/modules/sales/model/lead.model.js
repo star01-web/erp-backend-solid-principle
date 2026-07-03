@@ -1,6 +1,5 @@
-const DataTypes = require('sequelize');
+const { DataTypes } = require('sequelize');
 const sequelize = require('../../../common/db.config.js');
-const { email } = require('zod');
 
 
 const Lead = sequelize.define('Lead', {
@@ -8,13 +7,14 @@ const Lead = sequelize.define('Lead', {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
         allowNull: false,
+        primaryKey: true,
     },
     leadId: {
         type: DataTypes.STRING,
         allowNull: false,
         unique: true,
     },
-    assingeTo: {
+    assignedTo: {
         type: DataTypes.STRING,
         allowNull: false,
     },
@@ -23,7 +23,7 @@ const Lead = sequelize.define('Lead', {
         allowNull: false,
     },
     contactNumber: {
-        type: DataTypes.NUMBER,
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true,
     },

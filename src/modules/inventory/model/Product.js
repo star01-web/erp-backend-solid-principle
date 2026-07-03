@@ -14,7 +14,9 @@ const Product = sequelize.define(
       unique: true,
       allowNull: false,
     },
-    name: { type: DataTypes.STRING, allowNull: false },
+    // Unique at the DB level too — the controller's name check alone leaves a
+    // race window under concurrent creates.
+    name: { type: DataTypes.STRING, allowNull: false, unique: true },
 
     // --- Product Attributes ---
     // Color yahan se hata diya gaya hai. Ab yeh StockTransaction aur StockLevel mein jayega.

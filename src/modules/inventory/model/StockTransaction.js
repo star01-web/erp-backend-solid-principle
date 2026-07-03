@@ -77,11 +77,15 @@ const StockTransaction = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    // Set when a transaction is later corrected via updateStockMovement.
+    updated_by: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
   },
   {
     tableName: "inventory_transactions",
-    timestamps: true,
-    updatedAt: false, // Transaction record change nahi hona chahiye
+    timestamps: true, // createdAt + updatedAt track when a correction happened
 
     validate: {
       partnerRequired() {
