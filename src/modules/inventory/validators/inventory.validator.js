@@ -66,6 +66,17 @@ const bulkMovementSchema = z
   })
   .loose();
 
+// --- Site material return ---
+const RETURN_MSG = "siteId, ProductId, WarehouseId aur returnQty required hain.";
+const siteReturnSchema = z
+  .object({
+    siteId: nonEmpty(RETURN_MSG),
+    ProductId: nonEmpty(RETURN_MSG),
+    WarehouseId: nonEmpty(RETURN_MSG),
+    returnQty: z.union([z.number(), z.string().min(1)], { error: RETURN_MSG }),
+  })
+  .loose();
+
 module.exports = {
   createProductSchema,
   bulkCreateProductsSchema,
@@ -73,4 +84,5 @@ module.exports = {
   createPartnerSchema,
   createMovementSchema,
   bulkMovementSchema,
+  siteReturnSchema,
 };

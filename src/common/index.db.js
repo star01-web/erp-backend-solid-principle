@@ -12,6 +12,9 @@ const Warehouse = require("../modules/inventory/model/Warehouse");
 const StockLevel = require("../modules/inventory/model/StockLevel");
 const StockTransaction = require("../modules/inventory/model/StockTransaction");
 const Partner = require("../modules/inventory/model/Partner");
+const Site = require("../modules/inventory/model/Site");
+const SiteStockLevel = require("../modules/inventory/model/SiteStockLevel");
+const SiteMaterialReturn = require("../modules/inventory/model/SiteMaterialReturn");
 const db = {
   sequelize,
   Sequelize,
@@ -26,6 +29,10 @@ const db = {
   StockLevel,
   StockTransaction,
   Partner,
+  // Site Management Models
+  Site,
+  SiteStockLevel,
+  SiteMaterialReturn,
 };
 
 // --- ASSOCIATIONS (RELATIONS) ---
@@ -133,5 +140,31 @@ db.StockTransaction.belongsTo(db.Partner, {
   foreignKey: "manufacturer_id",
   as: "originManufacturer",
 });
+
+// --- SITE MANAGEMENT ASSOCIATIONS ---
+// NOTE: `Site.projectId` column model par defined hai, lekin Project model
+// abhi codebase mein exist nahi karta. Jab Project model banega, yahan add karein:
+//   db.Project.hasMany(db.Site, { foreignKey: "projectId", as: "sites" });
+//   db.Site.belongsTo(db.Project, { foreignKey: "projectId", as: "project" });
+
+// 1. SiteStockLevel -> Site & Product
+db.Site.hasMany(db.SiteStockLevel, { foreignKey: "siteId", as: "stockLevels" });
+db.SiteStockLevel.belongsTo(db.Site, { foreignKey: "siteId", as: "site" });
+
+db.Product.hasMany(db.SiteStockLevel, { foreignKey: "ProductId" });
+db.SiteStockLevel.belongsTo(db.Product, { foreignKey: "ProductId" });
+
+// 2. SiteMaterialReturn -> Site, Product & Warehouse
+db.Site.hasMany(db.SiteMaterialReturn, {
+  foreignKey: "siteId",
+  as: "materialReturns",
+});
+db.SiteMaterialReturn.belongsTo(db.Site, { foreignKey: "siteId", as: "site" });
+
+db.Product.hasMany(db.SiteMaterialReturn, { foreignKey: "ProductId" });
+db.SiteMaterialReturn.belongsTo(db.Product, { foreignKey: "ProductId" });
+
+db.Warehouse.hasMany(db.SiteMaterialReturn, { foreignKey: "WarehouseId" });
+db.SiteMaterialReturn.belongsTo(db.Warehouse, { foreignKey: "WarehouseId" });
 
 module.exports = db;

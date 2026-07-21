@@ -2,7 +2,8 @@
 
 This document records the changes made during the code-review and remediation
 sessions. Work is grouped into three areas: **security**, **HRM refactor
-completion**, and **inventory hardening**, plus docs.
+completion**, and **inventory hardening**, plus docs — followed by the new
+**Site Material Return** feature (§6).
 
 > **Status:** All changes are applied to the working tree and verified to load
 > (`node -e "require('./src/app')"` passes). Not yet committed.
@@ -145,6 +146,66 @@ Renamed the misspelled column `assingeTo` → `assignedTo` in
 
 ---
 
+## 6. New Feature — Site Material Return (2026-07-21)
+
+Returning unused/scrap material from a Project Site back to a Warehouse, with
+variant-level tracking (`manufacturer_id` + `color`) end to end.
+
+**Endpoint:** `POST /v2/api/inventory/site-return`
+(guards: `verifyToken` → `canManageInventory` → Zod `siteReturnSchema`)
+
+### Added — models (`src/modules/inventory/model/`)
+
+| Model | Table | Notes |
+|-------|-------|-------|
+| `Site` | `inventory_sites` | `projectId` (nullable UUID), `name`, `location`, `is_active`, paranoid soft-delete (Warehouse conventions) |
+| `SiteStockLevel` | `inventory_site_stock_levels` | `inHandQty DECIMAL(15,3)` (matches `StockLevel` precision), **unique index `(siteId, ProductId, manufacturer_id, color)`** |
+| `SiteMaterialReturn` | `inventory_site_material_returns` | `returnQty`, `returnDate`, `condition` ENUM('Good','Damaged','Scrap'), `remarks`, `created_by` + variant fields; indexed on FKs, `manufacturer_id`, `returnDate` |
+
+Registered in `src/common/index.db.js` with associations:
+`SiteStockLevel` ↔ `Site`/`Product`; `SiteMaterialReturn` ↔ `Site`/`Product`/
+`Warehouse`. The requested `Site → Project` association is **deferred** (no
+`Project` model exists yet) — a commented block in `index.db.js` shows what to
+add when it does; `Site.projectId` exists as a plain column meanwhile.
+
+### Added — controller (`inventory_controller/siteReturn.controller.js`)
+
+`returnMaterialFromSite` runs five writes in **one Sequelize transaction**:
+
+1. Lock (`t.LOCK.UPDATE`) + validate `SiteStockLevel` for the exact variant —
+   insufficient stock → 400 rollback.
+2. Create `SiteMaterialReturn` (audit of the return event).
+3. Create `StockTransaction` audit row, linked via
+   `reference_no: 'SITE_RETURN-<returnId>'`, carrying the variant fields.
+4. Atomic `decrement` of site `inHandQty`.
+5. `findOrCreate` (locked) + atomic `increment` of main `StockLevel` for the
+   **same** `(ProductId, WarehouseId, manufacturer_id, color)` bucket.
+
+Design decisions:
+
+- **`type: 'RETURN'`, not `'INWARD'`** — `StockTransaction`'s `partnerRequired`
+  validator makes `partner_id` mandatory for INWARD/OUTWARD, and a site is not
+  a Partner; an INWARD row would fail on every request.
+- **Variant normalized once** (`manufacturer_id || null`, `color || 'Standard'`)
+  and reused in all queries — any drift between site and warehouse lookups
+  would silently split stock into different bucket rows.
+- Active-checks on `Site`/`Warehouse` before processing (matches
+  `processStockMovement`); positive-quantity and condition-ENUM input guards.
+
+### Added — wiring & tooling
+
+- `validators/inventory.validator.js` — new `siteReturnSchema` (requires
+  `siteId`, `ProductId`, `WarehouseId`, `returnQty`; `.loose()` so variant
+  fields pass through), keeping this route consistent with the module's other
+  mutating routes.
+- `Route/inventory.route.js` — new section *1b. SITE MATERIAL RETURN*.
+- `scripts/sync-site-tables.js` — standalone script that syncs **only** the
+  three new models with `{ alter: true }` (Site first — FK order), leaving the
+  global `sync({ alter: false })` in `server.js` untouched. Exits 0 on success,
+  1 on failure.
+
+---
+
 ## Deployment Notes
 
 `src/server.js` runs `sequelize.sync({ alter: false })`, so **schema changes
@@ -158,6 +219,14 @@ one-time `alter: true` sync:
    product names already exist.** De-duplicate existing rows before applying.
 4. **`Lead.assignedTo`** — only relevant if a `Leads` table was already created;
    otherwise it applies on first sync.
+5. **Site Material Return tables** — `inventory_sites`,
+   `inventory_site_stock_levels`, `inventory_site_material_returns` are new.
+   Create them with `node scripts/sync-site-tables.js` (targets only these
+   three tables; `alter: true` can drop/recreate their indexes — back up
+   first on production). If `inventory_site_stock_levels` was created from an
+   earlier revision with the 2-column unique index, the same script upgrades
+   it to the 4-column `(siteId, ProductId, manufacturer_id, color)` index.
+   **Not yet run against any database.**
 
 ---
 
@@ -169,20 +238,30 @@ one-time `alter: true` sync:
 - Inventory validators: reject empty bodies with original messages, pass valid ones.
 - Model attribute checks: `updated_by`, `updatedAt`, `Product.name` unique, and
   `Lead.assignedTo` all confirmed present; old `assingeTo` gone.
+- Site Material Return: `db.Site`/`db.SiteStockLevel`/`db.SiteMaterialReturn`
+  register with expected attributes and 4-column unique index; associations
+  resolve (`site, Product, Warehouse`); app loads with `POST /site-return`
+  registered (4 handlers: verifyToken → canManageInventory → validate →
+  controller). **Not yet exercised against a live database.**
 
 ## Files Changed — Summary
 
 **Added**
 - `src/modules/hrm/routes/{employee,attendance,officeLocation,export}.route.js`
 - `src/modules/inventory/validators/inventory.validator.js`
+- `src/modules/inventory/model/{Site,SiteStockLevel,SiteMaterialReturn}.js`
+- `src/modules/inventory/inventory_controller/siteReturn.controller.js`
+- `scripts/sync-site-tables.js`
 - `README.md` (rewritten), `CHANGES.md`
 
 **Modified**
 - `src/app.js`
+- `src/common/index.db.js` (site model registration + associations)
 - `src/modules/auth/validators/auth.validator.js`
 - `src/modules/auth/services/user.service.js`
 - `src/modules/auth/controllers/user.controller.js`
 - `src/modules/inventory/Route/inventory.route.js`
+- `src/modules/inventory/validators/inventory.validator.js` (siteReturnSchema)
 - `src/modules/inventory/model/StockTransaction.js`
 - `src/modules/inventory/model/Product.js`
 - `src/modules/inventory/inventory_controller/Partner.js`

@@ -6,6 +6,7 @@ const invCtrl = require("../inventory_controller/inventory.controller");
 const prodCtrl = require("../inventory_controller/product.controller");
 const whCtrl = require("../inventory_controller/warehouse.controller");
 const partnerCtrl = require("../inventory_controller/Partner");
+const siteReturnCtrl = require("../inventory_controller/siteReturn.controller");
 
 // Middleware Import
 const {
@@ -20,6 +21,7 @@ const {
   createPartnerSchema,
   createMovementSchema,
   bulkMovementSchema,
+  siteReturnSchema,
 } = require("../validators/inventory.validator");
 
 /**
@@ -80,6 +82,19 @@ router.get(
   "/dashboard",
   verifyToken,
   asyncHandler(invCtrl.getInventoryDashboard),
+);
+
+// ==========================================
+// 1b. SITE MATERIAL RETURN (Protected)
+// ==========================================
+// Site se unused/scrap material wapas warehouse mein (stock mutation,
+// isliye baaki movement routes ki tarah canManageInventory guard ke saath)
+router.post(
+  "/site-return",
+  verifyToken,
+  canManageInventory,
+  validate(siteReturnSchema, { withSuccess: true }),
+  asyncHandler(siteReturnCtrl.returnMaterialFromSite),
 );
 
 // ==========================================
