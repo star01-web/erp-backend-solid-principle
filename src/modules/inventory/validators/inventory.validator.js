@@ -77,6 +77,20 @@ const siteReturnSchema = z
   })
   .loose();
 
+// --- Site dispatch ledger (dispatch + return share the same shape) ---
+const DISPATCH_MSG =
+  "site_id, item_id, uom aur ek valid positive quantity zaroori hai.";
+const dispatchLedgerSchema = z
+  .object({
+    site_id: nonEmpty(DISPATCH_MSG),
+    item_id: nonEmpty(DISPATCH_MSG),
+    quantity: z.union([z.number(), z.string().min(1)], { error: DISPATCH_MSG }),
+    // Unit selected at entry — must be the item's base_uom or purchase_uom
+    // (the service validates it against the actual item).
+    uom: nonEmpty(DISPATCH_MSG),
+  })
+  .loose();
+
 module.exports = {
   createProductSchema,
   bulkCreateProductsSchema,
@@ -85,4 +99,5 @@ module.exports = {
   createMovementSchema,
   bulkMovementSchema,
   siteReturnSchema,
+  dispatchLedgerSchema,
 };

@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const AppError = require("../../../common/AppError");
-const { findMatchingOffice } = require("../utils/geo");
+const { findMatchingSite } = require("../utils/geo");
 const { getAddressFromOSM } = require("../utils/osm");
 const {
   TZ,
@@ -21,12 +21,12 @@ class AttendanceService {
     employeeRepository,
     checkInRepository,
     checkOutRepository,
-    officeLocationRepository,
+    projectSiteRepository,
   }) {
     this.employeeRepo = employeeRepository;
     this.checkInRepo = checkInRepository;
     this.checkOutRepo = checkOutRepository;
-    this.officeRepo = officeLocationRepository;
+    this.siteRepo = projectSiteRepository;
   }
 
   async checkIn({ requesterUserId, employee_ids, latitude, longitude }) {
@@ -59,8 +59,8 @@ class AttendanceService {
     }
 
     // 2. Geofencing (multiple offices)
-    const allOffices = await this.officeRepo.findAll();
-    const matchedOffice = findMatchingOffice(allOffices, latitude, longitude);
+    const allOffices = await this.siteRepo.findAll();
+    const matchedOffice = findMatchingSite(allOffices, latitude, longitude);
 
     const employeesToPunch = await this.employeeRepo.findAll({
       id: { [Op.in]: finalIdsToPunch },
@@ -113,12 +113,12 @@ class AttendanceService {
         : [requesterEmpId];
 
     const [allOffices, employees, finalAddress] = await Promise.all([
-      this.officeRepo.findAll(),
+      this.siteRepo.findAll(),
       this.employeeRepo.findAll({ id: { [Op.in]: targetEmployeeIds } }),
       getAddressFromOSM(latitude, longitude),
     ]);
 
-    const matchedOffice = findMatchingOffice(allOffices, latitude, longitude);
+    const matchedOffice = findMatchingSite(allOffices, latitude, longitude);
 
     for (const emp of employees) {
       const position = (emp.position || "").toLowerCase();

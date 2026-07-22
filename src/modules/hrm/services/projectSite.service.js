@@ -1,11 +1,11 @@
 const AppError = require("../../../common/AppError");
 
 /**
- * Office location business logic (geofence master data).
+ * Project site business logic (geofence master data).
  */
-class OfficeLocationService {
-  constructor({ officeLocationRepository }) {
-    this.officeRepo = officeLocationRepository;
+class ProjectSiteService {
+  constructor({ projectSiteRepository }) {
+    this.siteRepo = projectSiteRepository;
   }
 
   async create({ locationName, latitude, longitude, radiusInMeters }) {
@@ -19,7 +19,7 @@ class OfficeLocationService {
       throw new AppError("Invalid coordinates provided.", 400);
     }
 
-    const newLocation = await this.officeRepo.create({
+    const newSite = await this.siteRepo.create({
       locationName,
       latitude,
       longitude,
@@ -27,14 +27,14 @@ class OfficeLocationService {
     });
 
     return {
-      id: newLocation.id,
-      name: newLocation.locationName,
-      coords: [newLocation.latitude, newLocation.longitude],
+      id: newSite.id,
+      name: newSite.locationName,
+      coords: [newSite.latitude, newSite.longitude],
     };
   }
 
   async getAll() {
-    const locations = await this.officeRepo.findAll(
+    const sites = await this.siteRepo.findAll(
       {},
       {
         attributes: [
@@ -46,17 +46,17 @@ class OfficeLocationService {
         ],
       },
     );
-    if (locations.length === 0) {
+    if (sites.length === 0) {
       // Preserves the original Spanish 404 message
       throw new AppError("No se encontraron ubicaciones.", 404);
     }
-    return locations;
+    return sites;
   }
 
   async update(id, { locationName, latitude, longitude, radiusInMeters }) {
-    const location = await this.officeRepo.findById(id);
-    if (!location) {
-      throw new AppError("Office location not found.", 404);
+    const site = await this.siteRepo.findById(id);
+    if (!site) {
+      throw new AppError("Project site not found.", 404);
     }
     if (latitude !== undefined && (latitude < -90 || latitude > 90)) {
       throw new AppError("Invalid latitude.", 400);
@@ -65,19 +65,19 @@ class OfficeLocationService {
       throw new AppError("Invalid longitude.", 400);
     }
 
-    await location.update({
-      locationName: locationName || location.locationName,
-      latitude: latitude !== undefined ? latitude : location.latitude,
-      longitude: longitude !== undefined ? longitude : location.longitude,
+    await site.update({
+      locationName: locationName || site.locationName,
+      latitude: latitude !== undefined ? latitude : site.latitude,
+      longitude: longitude !== undefined ? longitude : site.longitude,
       radiusInMeters:
-        radiusInMeters !== undefined ? radiusInMeters : location.radiusInMeters,
+        radiusInMeters !== undefined ? radiusInMeters : site.radiusInMeters,
     });
 
-    return location;
+    return site;
   }
 
   async remove(id) {
-    const deletedRows = await this.officeRepo.destroy({ id });
+    const deletedRows = await this.siteRepo.destroy({ id });
     if (deletedRows === 0) {
       throw new AppError(
         "No se encontró la ubicación de la oficina con el ID proporcionado.",
@@ -88,4 +88,4 @@ class OfficeLocationService {
   }
 }
 
-module.exports = OfficeLocationService;
+module.exports = ProjectSiteService;

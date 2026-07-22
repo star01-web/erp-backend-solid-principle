@@ -9,24 +9,24 @@ const BaseRepository = require("../../common/BaseRepository");
 const EmployeeRepository = require("./repositories/employee.repository");
 const CheckInRepository = require("./repositories/checkIn.repository");
 const CheckOutRepository = require("./repositories/checkOut.repository");
-const OfficeLocationRepository = require("./repositories/officeLocation.repository");
+const ProjectSiteRepository = require("./repositories/projectSite.repository");
 
 const EmployeeService = require("./services/employee.service");
 const AttendanceService = require("./services/attendance.service");
 const PayrollService = require("./services/payroll.service");
-const OfficeLocationService = require("./services/officeLocation.service");
+const ProjectSiteService = require("./services/projectSite.service");
 const ExportService = require("./services/export.service");
 
 const EmployeeController = require("./controllers/employee.controller");
 const AttendanceController = require("./controllers/attendance.controller");
-const OfficeLocationController = require("./controllers/officeLocation.controller");
+const ProjectSiteController = require("./controllers/projectSite.controller");
 const ExportController = require("./controllers/export.controller");
 
 // Repositories
 const employeeRepository = new EmployeeRepository(db.EmployeeMaster);
 const checkInRepository = new CheckInRepository(db.CheckIn);
 const checkOutRepository = new CheckOutRepository(db.CheckOut);
-const officeLocationRepository = new OfficeLocationRepository(db.OfficeLocation);
+const projectSiteRepository = new ProjectSiteRepository(db.ProjectSite);
 const userRepository = new BaseRepository(db.User);
 
 // Services
@@ -39,11 +39,11 @@ const attendanceService = new AttendanceService({
   employeeRepository,
   checkInRepository,
   checkOutRepository,
-  officeLocationRepository,
+  projectSiteRepository,
 });
 const payrollService = new PayrollService({ employeeRepository });
-const officeLocationService = new OfficeLocationService({
-  officeLocationRepository,
+const projectSiteService = new ProjectSiteService({
+  projectSiteRepository,
 });
 const exportService = new ExportService({ employeeRepository });
 
@@ -53,14 +53,14 @@ const attendanceController = new AttendanceController({
   attendanceService,
   payrollService,
 });
-const officeLocationController = new OfficeLocationController({
-  officeLocationService,
+const projectSiteController = new ProjectSiteController({
+  projectSiteService,
 });
 const exportController = new ExportController({ exportService });
 
 module.exports = {
   employeeController,
   attendanceController,
-  officeLocationController,
+  projectSiteController,
   exportController,
 };

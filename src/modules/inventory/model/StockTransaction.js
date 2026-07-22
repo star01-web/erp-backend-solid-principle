@@ -62,6 +62,11 @@ const StockTransaction = sequelize.define(
     // --- Traceability & Status ---
     batch_number: { type: DataTypes.STRING },
     reference_no: { type: DataTypes.STRING },
+    vehicle_number: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      comment: "Vehicle number used for the material movement (transport)",
+    },
     movement_date: {
       type: DataTypes.DATE,
       allowNull: false,

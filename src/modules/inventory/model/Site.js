@@ -15,12 +15,21 @@ const Site = sequelize.define(
       type: DataTypes.UUID,
       allowNull: true,
     },
+    // Denormalised project name. `projectId` is the (future) FK; `project_name`
+    // is the human-readable label the consumption report surfaces without an
+    // extra join to a Project table that does not exist yet.
+    project_name: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    // `name` is the requirement's `site_name`.
     name: {
       type: DataTypes.STRING,
       allowNull: false,
     },
     location: { type: DataTypes.TEXT },
 
+    // `is_active` is the requirement's `status` (active/inactive) as a boolean.
     is_active: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,

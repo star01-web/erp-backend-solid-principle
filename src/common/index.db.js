@@ -6,7 +6,7 @@ const User = require("../modules/auth/models/user.model");
 const EmployeeMaster = require("../modules/hrm/models/EmployeeMaster");
 const CheckIn = require("../modules/hrm/models/CheckIn_model");
 const CheckOut = require("../modules/hrm/models/CheckOut_model");
-const OfficeLocation = require("../modules/hrm/models/Office_Location_model");
+const ProjectSite = require("../modules/hrm/models/ProjectSite_model");
 const Product = require("../modules/inventory/model/Product");
 const Warehouse = require("../modules/inventory/model/Warehouse");
 const StockLevel = require("../modules/inventory/model/StockLevel");
@@ -15,6 +15,7 @@ const Partner = require("../modules/inventory/model/Partner");
 const Site = require("../modules/inventory/model/Site");
 const SiteStockLevel = require("../modules/inventory/model/SiteStockLevel");
 const SiteMaterialReturn = require("../modules/inventory/model/SiteMaterialReturn");
+const SiteDispatchLog = require("../modules/inventory/model/SiteDispatchLog");
 const db = {
   sequelize,
   Sequelize,
@@ -22,7 +23,7 @@ const db = {
   EmployeeMaster,
   CheckIn,
   CheckOut,
-  OfficeLocation,
+  ProjectSite,
   // Add Inventory Models
   Product,
   Warehouse,
@@ -33,6 +34,7 @@ const db = {
   Site,
   SiteStockLevel,
   SiteMaterialReturn,
+  SiteDispatchLog,
 };
 
 // --- ASSOCIATIONS (RELATIONS) ---
@@ -57,12 +59,12 @@ db.CheckOut.belongsTo(db.EmployeeMaster, {
   as: "employee",
 });
 
-// 3. OfficeLocation to EmployeeMaster (Geofencing ke liye)
-db.OfficeLocation.hasMany(db.EmployeeMaster, {
+// 3. ProjectSite to EmployeeMaster (Geofencing ke liye)
+db.ProjectSite.hasMany(db.EmployeeMaster, {
   foreignKey: "location_id",
   as: "employees",
 });
-db.EmployeeMaster.belongsTo(db.OfficeLocation, {
+db.EmployeeMaster.belongsTo(db.ProjectSite, {
   foreignKey: "location_id",
   as: "location",
 });
@@ -166,5 +168,22 @@ db.SiteMaterialReturn.belongsTo(db.Product, { foreignKey: "ProductId" });
 
 db.Warehouse.hasMany(db.SiteMaterialReturn, { foreignKey: "WarehouseId" });
 db.SiteMaterialReturn.belongsTo(db.Warehouse, { foreignKey: "WarehouseId" });
+
+// --- SITE DISPATCH LEDGER ASSOCIATIONS ---
+// Cross-module ledger: every row belongs to one Site and one Item (Product).
+
+// 1. Site -> SiteDispatchLog (one site, many movements)
+db.Site.hasMany(db.SiteDispatchLog, {
+  foreignKey: "site_id",
+  as: "dispatchLogs",
+});
+db.SiteDispatchLog.belongsTo(db.Site, { foreignKey: "site_id", as: "site" });
+
+// 2. Product (Item) -> SiteDispatchLog (one item, many movements)
+db.Product.hasMany(db.SiteDispatchLog, {
+  foreignKey: "item_id",
+  as: "dispatchLogs",
+});
+db.SiteDispatchLog.belongsTo(db.Product, { foreignKey: "item_id", as: "item" });
 
 module.exports = db;

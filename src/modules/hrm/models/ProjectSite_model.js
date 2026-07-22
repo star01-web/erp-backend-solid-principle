@@ -1,14 +1,14 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../../../common/db.config.js');
 
-const OfficeLocation = sequelize.define('OfficeLocation', {
+const ProjectSite = sequelize.define('ProjectSite', {
     id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true
     },
     locationName: {
-        type: DataTypes.STRING, 
+        type: DataTypes.STRING,
         allowNull: false
     },
     latitude: {
@@ -21,10 +21,10 @@ const OfficeLocation = sequelize.define('OfficeLocation', {
     },
     radiusInMeters: {
         type: DataTypes.INTEGER,
-        defaultValue: 100 
+        defaultValue: 100
     }
 }, {
-    tableName: 'OfficeLocation'
+    tableName: 'ProjectSite'
 });
 
-module.exports = OfficeLocation;
+module.exports = ProjectSite;

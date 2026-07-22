@@ -269,6 +269,7 @@ const processStockMovement = async (req, res) => {
       type,
       batch_number,
       reference_no,
+      vehicle_number,
       remarks,
     } = req.body;
     const userId = req.user.id;
@@ -301,53 +302,108 @@ const processStockMovement = async (req, res) => {
       });
     }
 
-    const [stockRecord] = await db.StockLevel.findOrCreate({
-      where: {
-        ProductId: productId,
-        WarehouseId: warehouseId,
-        manufacturer_id: manufacturer_id || null,
-        color: color || "Standard",
-      },
-      defaults: { current_quantity: 0 },
-      transaction: t,
-      lock: t.LOCK.UPDATE,
-    });
-
-    let currentQty = Number(stockRecord.current_quantity);
-    let newQuantity;
+    const moveType = type.toUpperCase();
     const absQty = Math.abs(moveQty);
+    const isDeduction = ["OUTWARD", "SCRAP", "DISPATCH"].includes(moveType);
+    const isAddition = ["INWARD", "RETURN"].includes(moveType);
 
-    switch (type.toUpperCase()) {
-      case "INWARD":
-      case "RETURN":
-        newQuantity = currentQty + absQty;
-        break;
-      case "OUTWARD":
-      case "SCRAP":
-      case "DISPATCH":
-        if (currentQty < absQty) {
-          await t.rollback();
-          return res
-            .status(400)
-            .json({ success: false, message: "Insufficient stock." });
-        }
-        newQuantity = currentQty - absQty;
-        break;
-      case "ADJUSTMENT":
-        newQuantity = currentQty + moveQty;
-        if (newQuantity < 0) {
-          await t.rollback();
-          return res.status(400).json({
-            success: false,
-            message: "Adjustment leads to negative stock.",
-          });
-        }
-        break;
-      default:
+    // Variant the StockTransaction log will record. For deductions it is refined
+    // below to the ACTUAL source bucket the stock was taken from.
+    let logManufacturerId = manufacturer_id || null;
+    let logColor = color || "Standard";
+
+    if (isDeduction) {
+      // --- BUGFIX: find WHERE the stock actually is; never create an empty
+      // bucket for an outward. Stock is keyed by (product, warehouse,
+      // manufacturer_id, color). Earlier this used findOrCreate with
+      // `manufacturer_id || null` / `color || "Standard"`, so an outward that
+      // omitted the manufacturer/color looked at an EMPTY (null/Standard)
+      // bucket, created it with qty 0, and falsely returned "Insufficient
+      // stock" even though the product had stock under another variant.
+      //
+      // Fix: constrain manufacturer_id / color ONLY when the caller actually
+      // supplied them, then deduct from the matching bucket(s). ---
+      const variantWhere = { ProductId: productId, WarehouseId: warehouseId };
+      if (manufacturer_id) variantWhere.manufacturer_id = manufacturer_id;
+      if (color) variantWhere.color = color;
+
+      const stockRows = await db.StockLevel.findAll({
+        where: variantWhere,
+        order: [["current_quantity", "DESC"]], // drain the fullest bucket first
+        transaction: t,
+        lock: t.LOCK.UPDATE, // SELECT … FOR UPDATE: no concurrent oversell
+      });
+
+      const totalAvailable = stockRows.reduce(
+        (sum, r) => sum + Number(r.current_quantity),
+        0,
+      );
+
+      // Guard against negative stock — with the REAL available number so the
+      // caller can see the stock exists (just under a different variant).
+      if (totalAvailable < absQty) {
         await t.rollback();
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid transaction type." });
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient stock. Available: ${totalAvailable}, Requested: ${absQty}.`,
+        });
+      }
+
+      // Greedy deduction across the matched buckets (largest first), so a
+      // quantity split over several manufacturer/color rows can still be filled.
+      let remaining = absQty;
+      for (const row of stockRows) {
+        if (remaining <= 0) break;
+        const take = Math.min(Number(row.current_quantity), remaining);
+        await row.update(
+          {
+            current_quantity: Number(row.current_quantity) - take,
+            last_updated_at: new Date(),
+          },
+          { transaction: t },
+        );
+        remaining -= take;
+      }
+
+      // Reflect a real source bucket on the transaction log.
+      logManufacturerId = manufacturer_id || stockRows[0].manufacturer_id;
+      logColor = color || stockRows[0].color;
+    } else if (isAddition || moveType === "ADJUSTMENT") {
+      // Additions / adjustments: create-or-get the EXACT bucket, then apply.
+      const [stockRecord] = await db.StockLevel.findOrCreate({
+        where: {
+          ProductId: productId,
+          WarehouseId: warehouseId,
+          manufacturer_id: manufacturer_id || null,
+          color: color || "Standard",
+        },
+        defaults: { current_quantity: 0 },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+
+      const currentQty = Number(stockRecord.current_quantity);
+      // INWARD/RETURN add the absolute qty; ADJUSTMENT applies the signed delta.
+      const newQuantity =
+        moveType === "ADJUSTMENT" ? currentQty + moveQty : currentQty + absQty;
+
+      if (newQuantity < 0) {
+        await t.rollback();
+        return res.status(400).json({
+          success: false,
+          message: "Adjustment leads to negative stock.",
+        });
+      }
+
+      await stockRecord.update(
+        { current_quantity: newQuantity, last_updated_at: new Date() },
+        { transaction: t },
+      );
+    } else {
+      await t.rollback();
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid transaction type." });
     }
 
     const transactionLog = await db.StockTransaction.create(
@@ -356,23 +412,16 @@ const processStockMovement = async (req, res) => {
         ProductId: productId,
         WarehouseId: warehouseId,
         partner_id,
-        manufacturer_id,
-        color: color || "Standard",
-        type: type.toUpperCase(),
+        manufacturer_id: logManufacturerId,
+        color: logColor,
+        type: moveType,
         quantity: moveQty,
         unit_price: unit_price || 0,
         batch_number,
         reference_no,
+        vehicle_number,
         remarks,
         created_by: userId,
-      },
-      { transaction: t },
-    );
-
-    await stockRecord.update(
-      {
-        current_quantity: newQuantity,
-        last_updated_at: new Date(),
       },
       { transaction: t },
     );
@@ -387,7 +436,7 @@ const processStockMovement = async (req, res) => {
 
 const updateStockMovement = async (req, res) => {
   const { id } = req.params;
-  const { quantity: newQty, type: newType, remarks } = req.body;
+  const { quantity: newQty, type: newType, remarks, vehicle_number } = req.body;
   const t = await db.sequelize.transaction();
 
   try {
@@ -458,6 +507,8 @@ const updateStockMovement = async (req, res) => {
         quantity: finalQty,
         type: finalType,
         remarks: remarks || oldTx.remarks,
+        vehicle_number:
+          vehicle_number !== undefined ? vehicle_number : oldTx.vehicle_number,
         updated_by: req.user.id,
       },
       { transaction: t },
@@ -502,6 +553,7 @@ const bulkProcessStockMovement = async (req, res) => {
         type,
         batch_number,
         reference_no,
+        vehicle_number,
         partner_id,
         manufacturer_id,
         color,
@@ -565,6 +617,7 @@ const bulkProcessStockMovement = async (req, res) => {
         unit_price: unit_price || 0,
         batch_number,
         reference_no,
+        vehicle_number,
         created_by: req.user.id,
       });
     }

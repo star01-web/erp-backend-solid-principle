@@ -27,7 +27,40 @@ const Product = sequelize.define(
     category: { type: DataTypes.STRING },
     unit: { type: DataTypes.STRING, defaultValue: "pcs" },
 
+    // --- Multi-UOM support ---
+    // total_stock is ALWAYS stored in base_uom. Entries can come in either
+    // base_uom or purchase_uom; the service converts to base before touching
+    // stock, so the counter never mixes units.
+    //   base_uom          -> smallest tracked unit, e.g. 'Meter'
+    //   purchase_uom      -> bulk unit goods are bought in, e.g. 'Bundle'
+    //   conversion_factor -> how many base units in one purchase unit, e.g. 100
+    //                        (1 Bundle = 100 Meter)
+    base_uom: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "pcs",
+    },
+    purchase_uom: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    conversion_factor: {
+      type: DataTypes.DECIMAL(15, 4),
+      allowNull: false,
+      defaultValue: 1,
+      // Never zero/negative — it is a multiplier used in stock math.
+      validate: { min: 0.0001 },
+    },
+
     // --- Stock Controls ---
+    // Single running stock counter used by the Site Dispatch ledger. dispatchItem
+    // deducts from it and returnItem adds back, both under a row-level lock so
+    // concurrent movements can never drive it negative.
+    total_stock: {
+      type: DataTypes.DECIMAL(15, 3),
+      allowNull: false,
+      defaultValue: 0,
+    },
     min_stock_level: {
       type: DataTypes.INTEGER,
       defaultValue: 5,

@@ -4,7 +4,7 @@ const MSG = "locationName, latitude, and longitude are required.";
 
 // Presence check only; coordinate-range validation stays in the service so its
 // distinct "Invalid coordinates provided." message is preserved.
-const createOfficeLocationSchema = z
+const createProjectSiteSchema = z
   .object({
     locationName: z.string({ error: MSG }).trim().min(1, MSG),
     latitude: z.coerce.number({ error: MSG }),
@@ -12,4 +12,4 @@ const createOfficeLocationSchema = z
   })
   .loose();
 
-module.exports = { createOfficeLocationSchema };
+module.exports = { createProjectSiteSchema };

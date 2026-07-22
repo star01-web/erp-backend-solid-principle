@@ -19,18 +19,18 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 /**
- * Returns the first office whose geofence contains the given point, or null.
- * @param {Array} offices - OfficeLocation records (latitude, longitude, radiusInMeters)
+ * Returns the first project site whose geofence contains the given point, or null.
+ * @param {Array} sites - ProjectSite records (latitude, longitude, radiusInMeters)
  */
-const findMatchingOffice = (offices, latitude, longitude) =>
-  offices.find((office) => {
+const findMatchingSite = (sites, latitude, longitude) =>
+  sites.find((site) => {
     const distance = getDistance(
       latitude,
       longitude,
-      office.latitude,
-      office.longitude,
+      site.latitude,
+      site.longitude,
     );
-    return distance <= (office.radiusInMeters || 100);
+    return distance <= (site.radiusInMeters || 100);
   });
 
-module.exports = { getDistance, findMatchingOffice };
+module.exports = { getDistance, findMatchingSite };

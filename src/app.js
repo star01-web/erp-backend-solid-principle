@@ -5,11 +5,12 @@ const helmet = require("helmet");
 const authRoutes = require("./modules/auth/routes/auth.route");
 const userRoutes = require("./modules/auth/routes/user.route");
 const CreateEmployee = require("./modules/hrm/routes/employee.route");
-const CreateOfficeLocation = require("./modules/hrm/routes/officeLocation.route");
+const CreateProjectSite = require("./modules/hrm/routes/projectSite.route");
 const attendaceRow = require("./modules/hrm/routes/attendance.route");
 const internalAuth = require("./modules/auth/middleware/api.internalAuth");
 const exportRoutes = require("./modules/hrm/routes/export.route");
 const inventoryRoutes = require("./modules/inventory/Route/inventory.route");
+const dispatchLedgerRoutes = require("./modules/inventory/Route/dispatch.route");
 const app = express();
 
 // --- Error Wrapper for Async Routes ---
@@ -49,12 +50,14 @@ app.get("/", (req, res) => {
 app.use("/v1/api/auth", authRoutes);
 app.use("/v2/api/user", userRoutes);
 app.use("/v2/api/employee", CreateEmployee);
-app.use("/v2/api/office-location", CreateOfficeLocation);
+app.use("/v2/api/project-site", CreateProjectSite);
 app.use("/v2/api/attendance", attendaceRow);
 app.use("/v2/api/export", exportRoutes);
 
 // Inventory Module Routes
 app.use("/v2/api/inventory", inventoryRoutes);
+// Site Dispatch ledger (dispatch / return / consumption report)
+app.use("/v2/api/inventory", dispatchLedgerRoutes);
 
 // --- 3. Error Handling Middleware ---
 // 404 Handler
