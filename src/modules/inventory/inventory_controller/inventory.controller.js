@@ -270,6 +270,7 @@ const processStockMovement = async (req, res) => {
       batch_number,
       reference_no,
       vehicle_number,
+      movement_date,
       remarks,
     } = req.body;
     const userId = req.user.id;
@@ -420,6 +421,7 @@ const processStockMovement = async (req, res) => {
         batch_number,
         reference_no,
         vehicle_number,
+        movement_date: movement_date || date || new Date(),
         remarks,
         created_by: userId,
       },
@@ -547,6 +549,7 @@ const bulkProcessStockMovement = async (req, res) => {
 
     for (const item of movements) {
       const {
+        date,
         productId,
         warehouseId,
         quantity,
@@ -554,6 +557,7 @@ const bulkProcessStockMovement = async (req, res) => {
         batch_number,
         reference_no,
         vehicle_number,
+        movement_date,
         partner_id,
         manufacturer_id,
         color,
@@ -607,6 +611,7 @@ const bulkProcessStockMovement = async (req, res) => {
       );
 
       processedTransactions.push({
+        date: date || new Date(),
         ProductId: productId,
         WarehouseId: warehouseId,
         partner_id,
@@ -618,6 +623,7 @@ const bulkProcessStockMovement = async (req, res) => {
         batch_number,
         reference_no,
         vehicle_number,
+        movement_date: movement_date || date || new Date(),
         created_by: req.user.id,
       });
     }
@@ -683,9 +689,9 @@ const getTransactionHistory = async (req, res) => {
     if (warehouseId) whereClause.WarehouseId = warehouseId;
     if (type) whereClause.type = type;
     if (startDate || endDate) {
-      whereClause.createdAt = {};
-      if (startDate) whereClause.createdAt[Op.gte] = new Date(startDate);
-      if (endDate) whereClause.createdAt[Op.lte] = new Date(endDate);
+      whereClause.date = {};
+      if (startDate) whereClause.date[Op.gte] = new Date(startDate);
+      if (endDate) whereClause.date[Op.lte] = new Date(endDate);
     }
 
     const { count, rows } = await db.StockTransaction.findAndCountAll({
@@ -700,7 +706,7 @@ const getTransactionHistory = async (req, res) => {
           attributes: ["id", "name"],
         },
       ],
-      order: [["createdAt", "DESC"]],
+      order: [["date", "DESC"]],
       limit: parseInt(limit),
       offset: parseInt(offset),
     });
