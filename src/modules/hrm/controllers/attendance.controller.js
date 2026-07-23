@@ -10,12 +10,32 @@ class AttendanceController {
     this.payrollService = payrollService;
   }
 
+  // Common Error Handler helper to avoid DRY (Don't Repeat Yourself) violation
+  #handleError(res, error, defaultMessage = "Internal Server Error") {
+    if (error instanceof AppError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    console.error("❌ Controller Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: defaultMessage,
+    });
+  }
+
   handleCheckIn = async (req, res) => {
     try {
-      if (!req.user || !req.user.id)
-        return res.status(401).json({ message: "Unauthorized." });
+      if (!req.user?.id) {
+        return res
+          .status(401)
+          .json({ success: false, message: "Unauthorized." });
+      }
 
-      const { employee_ids, latitude, longitude } = req.body;
+      // Safe destructuring with fallback
+      const { employee_ids, latitude, longitude } = req.body || {};
+
       const { records, location, address } =
         await this.attendanceService.checkIn({
           requesterUserId: req.user.id,
@@ -32,19 +52,20 @@ class AttendanceController {
         data: records,
       });
     } catch (error) {
-      if (error instanceof AppError)
-        return res.status(error.statusCode).json({ message: error.message });
-      console.error("CheckIn Controller Error:", error);
-      return res.status(500).json({ message: "Internal Server Error" });
+      return this.#handleError(res, error, "Check-in processing failed.");
     }
   };
 
   handleCheckOut = async (req, res) => {
     try {
-      if (!req.user?.id)
-        return res.status(401).json({ message: "Unauthorized." });
+      if (!req.user?.id) {
+        return res
+          .status(401)
+          .json({ success: false, message: "Unauthorized." });
+      }
 
-      const { employee_ids, latitude, longitude } = req.body;
+      const { employee_ids, latitude, longitude } = req.body || {};
+
       const { records, location } = await this.attendanceService.checkOut({
         requesterUserId: req.user.id,
         employee_ids,
@@ -59,24 +80,31 @@ class AttendanceController {
         data: records,
       });
     } catch (error) {
-      if (error instanceof AppError)
-        return res.status(error.statusCode).json({ message: error.message });
-      console.error("CheckOut Error:", error);
-      return res.status(500).json({ message: "Internal Server Error" });
+      return this.#handleError(res, error, "Check-out processing failed.");
     }
   };
 
   getTeamMembers = async (req, res) => {
     try {
+      if (!req.user?.hrm_employee_id) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message: "Employee ID missing in user token.",
+          });
+      }
+
       const teamMembers = await this.attendanceService.getTeamMembers(
         req.user.hrm_employee_id,
       );
-      return res
-        .status(200)
-        .json({ success: true, count: teamMembers.length, teamMembers });
+      return res.status(200).json({
+        success: true,
+        count: teamMembers.length,
+        teamMembers,
+      });
     } catch (error) {
-      console.error("❌ Team Fetch Error:", error);
-      return res.status(500).json({ success: false, message: "Server Error" });
+      return this.#handleError(res, error, "Failed to fetch team members.");
     }
   };
 
@@ -86,21 +114,20 @@ class AttendanceController {
       const data = await this.attendanceService.getAttendanceData({
         startDate,
         endDate,
-        userId: req.user.id,
-        role: req.user.role,
+        userId: req.user?.id,
+        role: req.user?.role,
       });
-      return res
-        .status(200)
-        .json({ success: true, count: data.length, data });
+      return res.status(200).json({
+        success: true,
+        count: data.length,
+        data,
+      });
     } catch (error) {
-      if (error instanceof AppError)
-        return res
-          .status(error.statusCode)
-          .json({ success: false, message: error.message });
-      console.error("Report Error:", error);
-      return res
-        .status(500)
-        .json({ success: false, message: "Internal Server Error" });
+      return this.#handleError(
+        res,
+        error,
+        "Failed to generate attendance report.",
+      );
     }
   };
 
@@ -111,14 +138,17 @@ class AttendanceController {
         startDate,
         endDate,
       });
-      return res
-        .status(200)
-        .json({ success: true, count: attendance.length, attendance });
+      return res.status(200).json({
+        success: true,
+        count: attendance.length,
+        attendance,
+      });
     } catch (error) {
-      console.error("❌ Attendance Error:", error);
-      return res
-        .status(500)
-        .json({ success: false, message: error.message });
+      return this.#handleError(
+        res,
+        error,
+        "Failed to fetch all attendance data.",
+      );
     }
   };
 
@@ -130,8 +160,8 @@ class AttendanceController {
           startDate,
           endDate,
           employeeId,
-          userId: req.user.id,
-          role: req.user.role,
+          userId: req.user?.id,
+          role: req.user?.role,
         });
       return res.status(200).json({
         success: true,
@@ -140,16 +170,11 @@ class AttendanceController {
         data: report,
       });
     } catch (error) {
-      if (error instanceof AppError)
-        return res
-          .status(error.statusCode)
-          .json({ success: false, message: error.message });
-      console.error("Filter API Error:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Server Error",
-        error: error.message,
-      });
+      return this.#handleError(
+        res,
+        error,
+        "Failed to filter attendance records.",
+      );
     }
   };
 
@@ -157,16 +182,16 @@ class AttendanceController {
     try {
       const { month } = req.query;
       const payroll = await this.payrollService.getMonthlyPayroll(month);
-      return res.status(200).json({ success: true, payroll });
+      return res.status(200).json({
+        success: true,
+        payroll,
+      });
     } catch (error) {
-      if (error instanceof AppError)
-        return res
-          .status(error.statusCode)
-          .json({ success: false, message: error.message });
-      console.error("Payroll Error:", error);
-      return res
-        .status(500)
-        .json({ success: false, message: error.message });
+      return this.#handleError(
+        res,
+        error,
+        "Failed to generate payroll report.",
+      );
     }
   };
 }
