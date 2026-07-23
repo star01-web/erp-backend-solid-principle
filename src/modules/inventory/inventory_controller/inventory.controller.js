@@ -670,6 +670,64 @@ const getInventoryDashboard = async (req, res) => {
   }
 };
 
+// Available Stock (Product-wise total): har product ek hi baar, uska total stock
+// sabhi warehouses / manufacturers / colors ka jodh kar. Dashboard per-bucket
+// deta hai (product baar-baar aata hai); yeh usko product ke hisaab se aggregate
+// karke single row deta hai.
+const getAvailableStock = async (req, res) => {
+  try {
+    // includeZero=true dene par jinke total 0 hai woh bhi aayenge; default only >0.
+    const includeZero = req.query.includeZero === "true";
+
+    const rows = await db.StockLevel.findAll({
+      attributes: [
+        "ProductId",
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("current_quantity")),
+          "total_quantity",
+        ],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("reserved_quantity")),
+          "total_reserved",
+        ],
+      ],
+      include: [
+        {
+          model: db.Product,
+          attributes: ["name", "sku_code", "unit", "min_stock_level"],
+        },
+      ],
+      group: ["ProductId", "Product.id"],
+      order: [[db.sequelize.col("Product.name"), "ASC"]],
+    });
+
+    const data = rows
+      .map((r) => {
+        const total = Number(r.get("total_quantity")) || 0;
+        const reserved = Number(r.get("total_reserved")) || 0;
+        const minLevel = Number(r.Product?.min_stock_level || 0);
+        return {
+          productId: r.ProductId,
+          name: r.Product?.name,
+          sku_code: r.Product?.sku_code,
+          unit: r.Product?.unit,
+          total_quantity: total,
+          reserved_quantity: reserved,
+          available_quantity: total - reserved,
+          min_stock_level: minLevel,
+          is_low_stock: total <= minLevel,
+        };
+      })
+      .filter((p) => includeZero || p.total_quantity > 0);
+
+    return res
+      .status(200)
+      .json({ success: true, count: data.length, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 const getTransactionHistory = async (req, res) => {
   try {
     const {
@@ -739,5 +797,6 @@ module.exports = {
 
   // Reports
   getInventoryDashboard,
+  getAvailableStock,
   getTransactionHistory,
 };

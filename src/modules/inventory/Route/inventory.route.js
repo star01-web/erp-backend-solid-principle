@@ -84,6 +84,13 @@ router.get(
   asyncHandler(invCtrl.getInventoryDashboard),
 );
 
+// Product-wise total available stock (har product single row, total stock).
+router.get(
+  "/available-stock",
+  verifyToken,
+  asyncHandler(invCtrl.getAvailableStock),
+);
+
 // ==========================================
 // 1b. SITE MATERIAL RETURN (Protected)
 // ==========================================
