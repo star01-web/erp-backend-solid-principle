@@ -60,6 +60,22 @@ class AttendanceService {
 
     // 2. Geofencing (multiple offices)
     const allOffices = await this.siteRepo.findAll();
+
+    // ── DEBUG: dump what came back from the ProjectSite table ──
+    console.log(`\n🔎 GEOFENCE DEBUG ─────────────────────────────`);
+    console.log(`   User coords  : lat=${latitude} (${typeof latitude}), lng=${longitude} (${typeof longitude})`);
+    console.log(`   Sites in DB  : ${allOffices.length}`);
+    allOffices.forEach((s, i) => {
+      const raw = s.get ? s.get({ plain: true }) : s;
+      console.log(
+        `   [${i}] "${raw.locationName}" ` +
+        `lat=${raw.latitude} (${typeof raw.latitude}), ` +
+        `lng=${raw.longitude} (${typeof raw.longitude}), ` +
+        `radius=${raw.radiusInMeters} (${typeof raw.radiusInMeters})`,
+      );
+    });
+    console.log(`────────────────────────────────────────────────\n`);
+
     const matchedOffice = findMatchingSite(allOffices, latitude, longitude);
 
     const employeesToPunch = await this.employeeRepo.findAll({
@@ -73,7 +89,9 @@ class AttendanceService {
         position.includes("field");
       if (!matchedOffice && !isFieldStaff) {
         throw new AppError(
-          `${emp.name} kisi bhi office location ke dayre mein nahi hain.`,
+          `${emp.name} kisi bhi office location ke dayre mein nahi hain. ` +
+          `(Sites found: ${allOffices.length}, ` +
+          `User lat/lng: ${latitude}/${longitude})`,
           403,
         );
       }
