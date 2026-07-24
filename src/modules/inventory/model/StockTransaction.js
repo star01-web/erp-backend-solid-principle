@@ -15,7 +15,7 @@ const StockTransaction = sequelize.define(
         "OUTWARD",
         "RETURN",
         "DAMAGE",
-        "ADJUSTMENT",
+        "ADJUSTMENT"
       ),
       allowNull: false,
     },
@@ -82,7 +82,7 @@ const StockTransaction = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
-    // Set when a transaction is later corrected via updateStockMovement.
+    // Note: Ise tabhi uncomment karna jab database me 'updated_by' column add kar lo
     // updated_by: {
     //   type: DataTypes.UUID,
     //   allowNull: true,
@@ -90,13 +90,14 @@ const StockTransaction = sequelize.define(
   },
   {
     tableName: "inventory_transactions",
-    timestamps: true, // createdAt + updatedAt track when a correction happened
+    timestamps: false, // <-- FIX: Ise false kar diya hai taaki 'updatedAt' ka error hamesha ke liye khatam ho jaye
+    underscored: true, // Use snake_case for column names
 
     validate: {
       partnerRequired() {
         if (["INWARD", "OUTWARD"].includes(this.type) && !this.partner_id) {
           throw new Error(
-            `${this.type} transaction ke liye Partner (Supplier/Customer) zaroori hai.`,
+            `${this.type} transaction ke liye Partner (Supplier/Customer) zaroori hai.`
           );
         }
       },
@@ -106,11 +107,11 @@ const StockTransaction = sequelize.define(
       { fields: ["ProductId"] },
       { fields: ["WarehouseId"] },
       { fields: ["partner_id"] },
-      { fields: ["manufacturer_id"] }, // Add kiya gaya for fast querying
+      { fields: ["manufacturer_id"] },
       { fields: ["batch_number"] },
       { fields: ["movement_date"] },
     ],
-  },
+  }
 );
 
 module.exports = StockTransaction;
