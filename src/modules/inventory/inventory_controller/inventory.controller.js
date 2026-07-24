@@ -720,9 +720,7 @@ const getAvailableStock = async (req, res) => {
       })
       .filter((p) => includeZero || p.total_quantity > 0);
 
-    return res
-      .status(200)
-      .json({ success: true, count: data.length, data });
+    return res.status(200).json({ success: true, count: data.length, data });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -764,7 +762,11 @@ const getTransactionHistory = async (req, res) => {
           attributes: ["id", "name"],
         },
       ],
-      order: [["date", "DESC"]],
+      order: [
+        ["createdAt", "DESC"],
+        ["date", "DESC"],
+        ["id", "DESC"],
+      ],
       limit: parseInt(limit),
       offset: parseInt(offset),
     });
