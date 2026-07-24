@@ -15,7 +15,7 @@ const StockTransaction = sequelize.define(
         "OUTWARD",
         "RETURN",
         "DAMAGE",
-        "ADJUSTMENT"
+        "ADJUSTMENT",
       ),
       allowNull: false,
     },
@@ -30,13 +30,13 @@ const StockTransaction = sequelize.define(
     ProductId: {
       type: DataTypes.UUID,
       allowNull: false,
-      field: "product_id",
+      field: "ProductId",
       references: { model: "inventory_products", key: "id" },
     },
     WarehouseId: {
       type: DataTypes.UUID,
       allowNull: false,
-      field: "warehouse_id",
+      field: "WarehouseId",
       references: { model: "inventory_warehouses", key: "id" },
     },
     partner_id: {
@@ -84,6 +84,11 @@ const StockTransaction = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    createdAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      field: "createdAt",
+    },
     // Note: Ise tabhi uncomment karna jab database me 'updated_by' column add kar lo
     // updated_by: {
     //   type: DataTypes.UUID,
@@ -92,14 +97,16 @@ const StockTransaction = sequelize.define(
   },
   {
     tableName: "inventory_transactions",
-    timestamps: false, // <-- FIX: Ise false kar diya hai taaki 'updatedAt' ka error hamesha ke liye khatam ho jaye
+    timestamps: true,
+    createdAt: "createdAt",
+    updatedAt: false,
     underscored: true, // Use snake_case for column names
 
     validate: {
       partnerRequired() {
         if (["INWARD", "OUTWARD"].includes(this.type) && !this.partner_id) {
           throw new Error(
-            `${this.type} transaction ke liye Partner (Supplier/Customer) zaroori hai.`
+            `${this.type} transaction ke liye Partner (Supplier/Customer) zaroori hai.`,
           );
         }
       },
@@ -113,7 +120,7 @@ const StockTransaction = sequelize.define(
       { fields: ["batch_number"] },
       { fields: ["movement_date"] },
     ],
-  }
+  },
 );
 
 module.exports = StockTransaction;
