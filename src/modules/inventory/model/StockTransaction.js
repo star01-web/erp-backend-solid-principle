@@ -30,6 +30,7 @@ const StockTransaction = sequelize.define(
     ProductId: {
       type: DataTypes.UUID,
       allowNull: false,
+      field: "product_id",
       references: { model: "inventory_products", key: "id" },
     },
     WarehouseId: {
