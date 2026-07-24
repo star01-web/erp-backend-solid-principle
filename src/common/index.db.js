@@ -92,20 +92,19 @@ db.EmployeeMaster.belongsTo(db.EmployeeMaster, {
 
 // --- INVENTORY ASSOCIATIONS ---
 
-// 1. Product & Warehouse Many-to-Many via StockLevel (Correct ✅)
-db.Product.hasMany(db.StockLevel, { foreignKey: "ProductId" });
-db.StockLevel.belongsTo(db.Product, { foreignKey: "ProductId" });
+// 1. Product & Warehouse Many-to-Many via StockLevel
+db.Product.hasMany(db.StockLevel, { foreignKey: "product_id" });
+db.StockLevel.belongsTo(db.Product, { foreignKey: "product_id" });
 
-db.Warehouse.hasMany(db.StockLevel, { foreignKey: "WarehouseId" });
-db.StockLevel.belongsTo(db.Warehouse, { foreignKey: "WarehouseId" });
+db.Warehouse.hasMany(db.StockLevel, { foreignKey: "warehouse_id" });
+db.StockLevel.belongsTo(db.Warehouse, { foreignKey: "warehouse_id" });
 
-// 2. Transactions Relations (Correct ✅)
-db.Product.hasMany(db.StockTransaction, { foreignKey: "ProductId" });
-db.StockTransaction.belongsTo(db.Product, { foreignKey: "ProductId" });
+// 2. Transactions Relations (CORRECTED TO MATCH DB COLUMNS 🛠️)
+db.Product.hasMany(db.StockTransaction, { foreignKey: "product_id" });
+db.StockTransaction.belongsTo(db.Product, { foreignKey: "product_id" });
 
-db.Warehouse.hasMany(db.StockTransaction, { foreignKey: "WarehouseId" });
-db.StockTransaction.belongsTo(db.Warehouse, { foreignKey: "WarehouseId" });
-
+db.Warehouse.hasMany(db.StockTransaction, { foreignKey: "warehouse_id" });
+db.StockTransaction.belongsTo(db.Warehouse, { foreignKey: "warehouse_id" });
 // --- UPDATED INDUSTRIAL ASSOCIATIONS ---
 
 // 3. Product & Manufacturer (CORRECTED: Many-to-Many 🛠️)
