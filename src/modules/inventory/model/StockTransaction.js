@@ -36,6 +36,7 @@ const StockTransaction = sequelize.define(
     WarehouseId: {
       type: DataTypes.UUID,
       allowNull: false,
+      field: "warehouse_id",
       references: { model: "inventory_warehouses", key: "id" },
     },
     partner_id: {
