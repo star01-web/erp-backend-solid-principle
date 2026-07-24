@@ -83,10 +83,10 @@ const StockTransaction = sequelize.define(
       allowNull: false,
     },
     // Set when a transaction is later corrected via updateStockMovement.
-    updated_by: {
-      type: DataTypes.UUID,
-      allowNull: true,
-    },
+    // updated_by: {
+    //   type: DataTypes.UUID,
+    //   allowNull: true,
+    // },
   },
   {
     tableName: "inventory_transactions",
