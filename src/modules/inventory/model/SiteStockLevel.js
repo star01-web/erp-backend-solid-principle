@@ -42,6 +42,7 @@ const SiteStockLevel = sequelize.define(
   {
     tableName: "inventory_site_stock_levels",
     timestamps: true,
+    underscored: true,
     indexes: [
       {
         unique: true,
