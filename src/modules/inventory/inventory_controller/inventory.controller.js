@@ -568,61 +568,83 @@ const bulkProcessStockMovement = async (req, res) => {
         throw new Error(`Invalid data for product ${productId}`);
       }
 
+      const movementType = type.toUpperCase();
+      const moveQty = Number(quantity);
+      const absQty = Math.abs(moveQty);
+
+      // --- SMART WHERE CLAUSE BUILDER ---
+      // Agar UI se color/manufacturer aayega tabhi match karega, warna sirf Product aur Warehouse dekhega
+      const whereCondition = {
+        ProductId: productId,
+        WarehouseId: warehouseId,
+      };
+
+      if (manufacturer_id !== undefined && manufacturer_id !== null) {
+        whereCondition.manufacturer_id = manufacturer_id;
+      }
+      if (color !== undefined && color !== "") {
+        whereCondition.color = color;
+      }
+
       let stockRecord = await db.StockLevel.findOne({
-        where: {
-          ProductId: productId,
-          WarehouseId: warehouseId,
-          manufacturer_id: manufacturer_id || null,
-          color: color || "Standard",
-        },
+        where: whereCondition,
         lock: t.LOCK.UPDATE,
         transaction: t,
       });
 
-      if (!stockRecord) {
-        stockRecord = await db.StockLevel.create(
-          {
-            ProductId: productId,
-            WarehouseId: warehouseId,
-            manufacturer_id: manufacturer_id || null,
-            color: color || "Standard",
-            current_quantity: 0,
-          },
-          { transaction: t },
-        );
-      }
+      const isInwardType = ["INWARD", "RETURN", "ADJUSTMENT"].includes(movementType);
 
-      let currentQty = Number(stockRecord.current_quantity);
-      const moveQty = Number(quantity);
-      const absQty = Math.abs(moveQty);
-
-      if (["INWARD", "RETURN", "ADJUSTMENT"].includes(type.toUpperCase())) {
-        currentQty += moveQty;
-      } else {
-        if (currentQty < absQty) {
-          throw new Error(`Insufficient stock for Product ID: ${productId}`);
+      // --- LOGIC FOR OUTWARD / DISPATCH ---
+      if (!isInwardType) {
+        // Agar Outward me stock mila hi nahi, toh turant error do (Faltu row create mat karo)
+        if (!stockRecord) {
+          throw new Error(`Stock not found in selected warehouse for Product ID: ${productId}`);
         }
-        currentQty -= absQty;
-      }
 
-      await stockRecord.update(
-        { current_quantity: currentQty },
-        { transaction: t },
-      );
+        let currentQty = Number(stockRecord.current_quantity || 0);
+
+        if (currentQty < absQty) {
+          throw new Error(`Insufficient stock! Available: ${currentQty}, Requested: ${absQty} (Product ID: ${productId})`);
+        }
+
+        currentQty -= absQty;
+        await stockRecord.update({ current_quantity: currentQty }, { transaction: t });
+      } 
+      
+      // --- LOGIC FOR INWARD / RETURN ---
+      else {
+        if (!stockRecord) {
+          // Inward hai aur record nahi hai, tab nayi row create karna banta hai
+          stockRecord = await db.StockLevel.create(
+            {
+              ProductId: productId,
+              WarehouseId: warehouseId,
+              manufacturer_id: manufacturer_id || null,
+              color: color || "Standard",
+              current_quantity: absQty,
+            },
+            { transaction: t }
+          );
+        } else {
+          let currentQty = Number(stockRecord.current_quantity || 0);
+          currentQty += absQty;
+          await stockRecord.update({ current_quantity: currentQty }, { transaction: t });
+        }
+      }
 
       processedTransactions.push({
         date: date || new Date(),
         ProductId: productId,
         WarehouseId: warehouseId,
-        partner_id,
-        manufacturer_id,
+        partner_id: partner_id || null,
+        manufacturer_id: manufacturer_id || null,
         color: color || "Standard",
-        type: type.toUpperCase(),
+        type: movementType,
         quantity: moveQty,
         unit_price: unit_price || 0,
-        batch_number,
-        reference_no,
-        vehicle_number,
+        batch_number: batch_number || null,
+        reference_no: reference_no || null,
+        vehicle_number: vehicle_number || null,
         movement_date: movement_date || date || new Date(),
         created_by: req.user.id,
       });
@@ -631,12 +653,14 @@ const bulkProcessStockMovement = async (req, res) => {
     await db.StockTransaction.bulkCreate(processedTransactions, {
       transaction: t,
     });
+    
     await t.commit();
     return res
       .status(201)
       .json({ success: true, message: "Bulk stock updated successfully." });
   } catch (error) {
     await t.rollback();
+    console.error("Bulk Stock Movement Error:", error.message);
     return res.status(400).json({ success: false, message: error.message });
   }
 };
