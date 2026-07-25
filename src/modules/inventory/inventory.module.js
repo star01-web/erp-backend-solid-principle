@@ -14,20 +14,29 @@ const SiteDispatchLogRepository = require("./repositories/siteDispatchLog.reposi
 const DispatchService = require("./services/dispatch.service");
 const DispatchController = require("./inventory_controller/dispatch.controller");
 
-// Repositories (data access)
+// ==========================================
+// 1. REPOSITORIES (Data Access Layer)
+// ==========================================
 const productRepository = new BaseRepository(db.Product);
 const siteDispatchLogRepository = new SiteDispatchLogRepository(
   db.SiteDispatchLog,
 );
+// NEW: Added repository for Site Stock Level tracking
+const siteStockRepository = new BaseRepository(db.SiteStockLevel);
 
-// Services (business logic + transactions)
+// ==========================================
+// 2. SERVICES (Business Logic & Transactions)
+// ==========================================
 const dispatchService = new DispatchService({
   productRepository,
   siteDispatchLogRepository,
+  siteStockRepository, // <-- NEW: Injected to manage live site stock
   sequelize: db.sequelize,
 });
 
-// Controllers (HTTP)
+// ==========================================
+// 3. CONTROLLERS (HTTP Layer)
+// ==========================================
 const dispatchController = new DispatchController({ dispatchService });
 
 module.exports = {

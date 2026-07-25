@@ -10,11 +10,11 @@ const {
 const { dispatchLedgerSchema } = require("../validators/inventory.validator");
 
 // Controller instance comes from the composition root (repo -> service ->
-// controller already wired with its dependencies).
+// controller already wired with its dependencies via Dependency Injection).
 const { dispatchController } = require("../inventory.module");
 
-// Same write-guard used across the inventory module: only managers/admin can
-// move stock; reports stay open to any authenticated user.
+// Write-guard middleware: strictly limits stock movement and ledger mutations
+// to authorized management roles. Reports remain accessible to any authenticated user.
 const canManageInventory = authorizeRoles(
   "ADMIN",
   "INVENTORY_MANAGER",
@@ -22,32 +22,52 @@ const canManageInventory = authorizeRoles(
 );
 
 // ==========================================
-// SITE DISPATCH LEDGER
+// SITE DISPATCH LEDGER & STOCK ROUTES
 // ==========================================
 
-// Issue material from stock to a site (deducts stock, logs DISPATCH).
+/**
+ * @route   POST /v2/api/inventory/ledger/dispatch
+ * @desc    Issue material from warehouse stock to a site.
+ *          Deducts warehouse stock, increases site stock, and logs a DISPATCH transaction.
+ * @access  Private (Admin, Inventory Manager, Factory Manager)
+ */
 router.post(
   "/ledger/dispatch",
   verifyToken,
   canManageInventory,
   validate(dispatchLedgerSchema, { withSuccess: true }),
-  asyncHandler(dispatchController.dispatchItem),
+  asyncHandler((req, res, next) =>
+    dispatchController.dispatchItem(req, res, next),
+  ),
 );
 
-// Return material from a site back into stock (adds stock, logs RETURN).
+/**
+ * @route   POST /v2/api/inventory/ledger/return
+ * @desc    Return material from a site back into warehouse stock.
+ *          Deducts site stock, increases warehouse stock, and logs a RETURN transaction.
+ * @access  Private (Admin, Inventory Manager, Factory Manager)
+ */
 router.post(
   "/ledger/return",
   verifyToken,
   canManageInventory,
   validate(dispatchLedgerSchema, { withSuccess: true }),
-  asyncHandler(dispatchController.returnItem),
+  asyncHandler((req, res, next) =>
+    dispatchController.returnItem(req, res, next),
+  ),
 );
 
-// Net consumption report per item for a given site.
+/**
+ * @route   GET /v2/api/inventory/ledger/consumption/:siteId
+ * @desc    Get aggregated net consumption report (Dispatched - Returned) in Base UOM for a site.
+ * @access  Private (Any Authenticated User)
+ */
 router.get(
   "/ledger/consumption/:siteId",
   verifyToken,
-  asyncHandler(dispatchController.getConsumptionReport),
+  asyncHandler((req, res, next) =>
+    dispatchController.getConsumptionReport(req, res, next),
+  ),
 );
 
 module.exports = router;

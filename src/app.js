@@ -11,6 +11,9 @@ const internalAuth = require("./modules/auth/middleware/api.internalAuth");
 const exportRoutes = require("./modules/hrm/routes/export.route");
 const inventoryRoutes = require("./modules/inventory/Route/inventory.route");
 const dispatchLedgerRoutes = require("./modules/inventory/Route/dispatch.route");
+// ✅ NEW: Site Route Import
+const siteRoutes = require("./modules/inventory/Route/site.route");
+
 const app = express();
 
 // --- Error Wrapper for Async Routes ---
@@ -28,7 +31,6 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, Postman)
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       callback(new Error(`CORS: origin '${origin}' not allowed`));
@@ -38,9 +40,10 @@ app.use(
     credentials: true,
   }),
 );
-// Ensure preflight OPTIONS requests are handled before other middleware
+
 app.options("/", cors());
 app.use(helmet());
+
 // --- 2. Routes ---
 app.get("/", (req, res) => {
   res.send("✅ ERP-Star Backend is Running Successfully!");
@@ -56,16 +59,15 @@ app.use("/v2/api/export", exportRoutes);
 
 // Inventory Module Routes
 app.use("/v2/api/inventory", inventoryRoutes);
-// Site Dispatch ledger (dispatch / return / consumption report)
 app.use("/v2/api/inventory", dispatchLedgerRoutes);
+// ✅ NEW: Site Route Register (Jo dono tables me data feed karega)
+app.use("/v2/api/inventory/site", siteRoutes);
 
 // --- 3. Error Handling Middleware ---
-// 404 Handler
 app.use((req, res) => {
   res.status(404).json({ message: "❌ Route not found" });
 });
 
-// Global Error Handler (MUST be last)
 app.use((err, req, res, next) => {
   const statusCode = err.status || err.statusCode || 500;
   const errorMessage = err.message || "Internal Server Error";
@@ -85,13 +87,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Handle Unhandled Promise Rejections
 process.on("unhandledRejection", (reason, promise) => {
   console.error("\n⚠️ Unhandled Rejection:", reason);
   console.error("Promise:", promise);
 });
 
-// Handle Uncaught Exceptions
 process.on("uncaughtException", (error) => {
   console.error("\n❌ UNCAUGHT EXCEPTION:", error);
   process.exit(1);

@@ -6,7 +6,9 @@ const {
   verifyToken,
   authorizeRoles,
 } = require("../../auth/middleware/authMiddleware");
-const { createProjectSiteSchema } = require("../validators/projectSite.validator");
+const {
+  createProjectSiteSchema,
+} = require("../validators/projectSite.validator");
 const { projectSiteController } = require("../hrm.module");
 
 // Site management sirf ADMIN/HR ke liye; listing kisi bhi logged-in user ke liye

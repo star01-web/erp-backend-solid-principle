@@ -1,7 +1,7 @@
 const AppError = require("../../../common/AppError");
 
 /**
- * Site Dispatch ledger — business logic + transaction ownership.
+ * Site Dispatch ledger & stock management — business logic + transaction ownership.
  *
  * SRP: this service is the ONLY place that runs business rules, performs UOM
  * conversions, manages transactions and touches Sequelize. Controllers just
@@ -9,20 +9,27 @@ const AppError = require("../../../common/AppError");
  * not on models directly, except for the transaction handle which the shared
  * `sequelize` instance provides.
  *
- * Multi-UOM rule: Product.total_stock and every stock calculation live in the
- * item's BASE uom. An entry may arrive in base_uom or purchase_uom; this
- * service converts it to base_quantity BEFORE any validation or mutation, so
- * the stock counter can never mix units.
+ * Multi-UOM rule: Product.total_stock, SiteStockLevel.current_stock and every
+ * stock calculation live in the item's BASE uom. An entry may arrive in base_uom
+ * or purchase_uom; this service converts it to base_quantity BEFORE any validation
+ * or mutation, so the stock counter can never mix units.
  *
  * Both mutating methods use a MANAGED transaction — `sequelize.transaction(cb)`
- * auto-commits when `cb` resolves and auto-rolls-back if it throws. The Product
- * row is locked with `t.LOCK.UPDATE` (SELECT … FOR UPDATE) so two concurrent
- * movements of the same item can never both read the old stock and oversell.
+ * auto-commits when `cb` resolves and auto-rolls-back if it throws. Both Product
+ * and SiteStock rows are locked with `t.LOCK.UPDATE` (SELECT … FOR UPDATE) so
+ * concurrent movements can never cause race conditions or oversell.
  */
 class DispatchService {
-  constructor({ productRepository, siteDispatchLogRepository, sequelize }) {
+  // NEW: Added siteStockRepository to dependencies
+  constructor({
+    productRepository,
+    siteDispatchLogRepository,
+    siteStockRepository,
+    sequelize,
+  }) {
     this.productRepo = productRepository;
     this.logRepo = siteDispatchLogRepository;
+    this.siteStockRepo = siteStockRepository;
     this.sequelize = sequelize;
   }
 
@@ -52,9 +59,9 @@ class DispatchService {
 
   /**
    * Convert an entered (quantity, uom) into the item's base UOM.
-   *   uom === base_uom      -> base_quantity = quantity
-   *   uom === purchase_uom  -> base_quantity = quantity * conversion_factor
-   *   anything else         -> reject (unknown unit for this item)
+   *   uom === base_uom       -> base_quantity = quantity
+   *   uom === purchase_uom   -> base_quantity = quantity * conversion_factor
+   *   anything else          -> reject (unknown unit for this item)
    * Returns a rounded base_quantity (3 dp, matching the DECIMAL(15,3) column).
    */
   _toBaseQuantity(item, quantity, uom) {
@@ -80,17 +87,27 @@ class DispatchService {
   }
 
   /**
-   * Issue material from stock to a site.
-   *  - Converts the entered qty/uom to base_quantity
-   *  - Validates base_quantity <= total_stock (strictly prevents negative stock)
+   * Issue material from warehouse stock to a site.
+   *  - Converts entered qty/uom to base_quantity
+   *  - Validates base_quantity <= Product.total_stock (prevents negative warehouse stock)
    *  - Deducts base_quantity from Product.total_stock (base UOM)
-   *  - Appends a 'DISPATCH' ledger row (entered qty + uom + base_quantity)
+   *  - Appends a 'DISPATCH' ledger row
+   *  - NEW: Adds base_quantity to SiteStockLevel (finds or creates site inventory row)
    */
-  async dispatchItem({ siteId, itemId, quantity, uom, remarks, transactionDate, userId }) {
+  async dispatchItem({
+    siteId,
+    itemId,
+    quantity,
+    uom,
+    remarks,
+    transactionDate,
+    userId,
+  }) {
     const qty = this._parsePositiveQty(quantity);
     this._assertValidInput(siteId, itemId, qty, uom);
 
     return this.sequelize.transaction(async (t) => {
+      // Lock Product row for update
       const item = await this.productRepo.findById(itemId, {
         transaction: t,
         lock: t.LOCK.UPDATE,
@@ -104,16 +121,16 @@ class DispatchService {
       const baseQty = this._toBaseQuantity(item, qty, uom);
       const currentStock = Number(item.total_stock);
 
-      // Guard: never let stock go negative.
+      // Guard: never let warehouse stock go negative.
       if (baseQty > currentStock) {
         throw new AppError(
-          `Insufficient stock. Available: ${currentStock} ${item.base_uom}, ` +
+          `Insufficient stock. Available in warehouse: ${currentStock} ${item.base_uom}, ` +
             `Requested: ${baseQty} ${item.base_uom}.`,
           400,
         );
       }
 
-      // 1) Deduct from the running stock counter (base UOM).
+      // 1) Deduct from the main warehouse stock counter (base UOM).
       item.total_stock = currentStock - baseQty;
       await item.save({ transaction: t });
 
@@ -133,25 +150,60 @@ class DispatchService {
         { transaction: t },
       );
 
+      // 3) NEW: Update Site Stock Level (Increment or Create)
+      let siteStock = await this.siteStockRepo.findOne({
+        where: { site_id: siteId, item_id: itemId },
+        transaction: t,
+        lock: t.LOCK.UPDATE, // Lock site row to prevent race conditions
+      });
+
+      if (!siteStock) {
+        // First time material is arriving at this site
+        siteStock = await this.siteStockRepo.create(
+          {
+            site_id: siteId,
+            item_id: itemId,
+            current_stock: baseQty,
+          },
+          { transaction: t },
+        );
+      } else {
+        // Material already exists at site, add to current stock
+        siteStock.current_stock = Number(siteStock.current_stock) + baseQty;
+        await siteStock.save({ transaction: t });
+      }
+
       return {
         log,
         base_uom: item.base_uom,
-        remaining_stock: Number(item.total_stock),
+        remaining_warehouse_stock: Number(item.total_stock),
+        site_current_stock: Number(siteStock.current_stock),
       };
     });
   }
 
   /**
-   * Material coming back from a site into stock.
-   *  - Converts the entered qty/uom to base_quantity
+   * Material coming back from a site into warehouse stock.
+   *  - Converts entered qty/uom to base_quantity
+   *  - NEW: Validates base_quantity <= SiteStockLevel.current_stock (prevents phantom returns)
+   *  - NEW: Deducts base_quantity from SiteStockLevel
    *  - Adds base_quantity back to Product.total_stock (base UOM)
-   *  - Appends a 'RETURN' ledger row (entered qty + uom + base_quantity)
+   *  - Appends a 'RETURN' ledger row
    */
-  async returnItem({ siteId, itemId, quantity, uom, remarks, transactionDate, userId }) {
+  async returnItem({
+    siteId,
+    itemId,
+    quantity,
+    uom,
+    remarks,
+    transactionDate,
+    userId,
+  }) {
     const qty = this._parsePositiveQty(quantity);
     this._assertValidInput(siteId, itemId, qty, uom);
 
     return this.sequelize.transaction(async (t) => {
+      // 1) Lock Product row
       const item = await this.productRepo.findById(itemId, {
         transaction: t,
         lock: t.LOCK.UPDATE,
@@ -160,11 +212,33 @@ class DispatchService {
 
       const baseQty = this._toBaseQuantity(item, qty, uom);
 
-      // 1) Add the returned quantity back to stock (base UOM).
+      // 2) NEW: Lock & Check Site Stock Level before allowing return
+      const siteStock = await this.siteStockRepo.findOne({
+        where: { site_id: siteId, item_id: itemId },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+
+      const currentSiteStock = siteStock ? Number(siteStock.current_stock) : 0;
+
+      // Guard: never allow returning more than what the site actually holds
+      if (baseQty > currentSiteStock) {
+        throw new AppError(
+          `Site ke paas return karne ke liye sufficient stock nahi hai. ` +
+            `Available at site: ${currentSiteStock} ${item.base_uom}, Requested Return: ${baseQty} ${item.base_uom}.`,
+          400,
+        );
+      }
+
+      // 3) NEW: Deduct from Site Stock Level
+      siteStock.current_stock = currentSiteStock - baseQty;
+      await siteStock.save({ transaction: t });
+
+      // 4) Add the returned quantity back to main warehouse stock (base UOM).
       item.total_stock = Number(item.total_stock) + baseQty;
       await item.save({ transaction: t });
 
-      // 2) Append the immutable RETURN ledger entry.
+      // 5) Append the immutable RETURN ledger entry.
       const log = await this.logRepo.create(
         {
           site_id: siteId,
@@ -183,15 +257,15 @@ class DispatchService {
       return {
         log,
         base_uom: item.base_uom,
-        remaining_stock: Number(item.total_stock),
+        remaining_warehouse_stock: Number(item.total_stock),
+        site_current_stock: Number(siteStock.current_stock),
       };
     });
   }
 
   /**
-   * Net consumption per item for one site, computed on base_quantity (so mixed
-   * entry units aggregate correctly). Delegates the grouped SQL to the
-   * repository, then normalises the shape for a clean payload.
+   * Net consumption per item for one site, computed on base_quantity.
+   * Delegates the grouped SQL to the repository, then normalises the shape.
    */
   async getConsumptionReport(siteId) {
     if (!siteId) throw new AppError("siteId param zaroori hai.", 400);
@@ -210,7 +284,6 @@ class DispatchService {
 
     return {
       site_id: siteId,
-      // Report is single-site, so project_name is constant across rows.
       project_name: items.length ? items[0].project_name : null,
       item_count: items.length,
       items,
