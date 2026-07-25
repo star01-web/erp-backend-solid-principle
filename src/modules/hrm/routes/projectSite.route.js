@@ -13,7 +13,7 @@ const { projectSiteController } = require("../hrm.module");
 router.post(
   "/create-project-site",
   verifyToken,
-  authorizeRoles("ADMIN", "HR"),
+  authorizeRoles("ADMIN", "HR", "INVENTORY_MANAGER"),
   validate(createProjectSiteSchema),
   asyncHandler(projectSiteController.createProjectSite),
 );
