@@ -40,6 +40,10 @@ const dispatchService = new DispatchService({
   productRepository,
   siteDispatchLogRepository,
   siteStockRepository,
+  // Dual-id resolution (inventory Site pk ya HRM ProjectSite id) ke liye —
+  // _resolveInventorySite in dono par depend karta hai.
+  siteRepository,
+  projectSiteRepository,
   sequelize: db.sequelize,
 });
 
