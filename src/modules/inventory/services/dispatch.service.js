@@ -198,6 +198,14 @@ class DispatchService {
     this._assertValidInput(siteId, itemId, qty, uom);
 
     return this.sequelize.transaction(async (t) => {
+      // Resolve FIRST: UI inventory-Site id ya HRM ProjectSite id — dono bhej
+      // sakta hai. Stock rows aur ledger hamesha resolved inventory-site id
+      // par anchor hote hain, warna dispatch ek id par likhta aur return/report
+      // dusri id par dhundhte (Available: 0 wala bug).
+      const site = await this._resolveInventorySite(siteId, t);
+      if (!site) throw new AppError("Site not found.", 404);
+      const inventorySiteId = site.id;
+
       // Lock Product row for update
       const item = await this.productRepo.findById(itemId, {
         transaction: t,
@@ -233,7 +241,7 @@ class DispatchService {
       // 2) Append the immutable DISPATCH ledger entry (both entered + base).
       const log = await this.logRepo.logDispatch(
         this._ledgerEntry({
-          siteId,
+          siteId: inventorySiteId,
           itemId,
           qty,
           uom,
@@ -247,7 +255,7 @@ class DispatchService {
 
       // 3) Increment the live per-site balance (find-or-create under lock).
       // Repository handles variant-key normalisation; we stay in base UOM.
-      const stockKey = { siteId, productId: itemId };
+      const stockKey = { siteId: inventorySiteId, productId: itemId };
       let siteStock = await this.siteStockRepo.findForUpdate(stockKey, t);
 
       if (!siteStock) {
@@ -292,6 +300,14 @@ class DispatchService {
     this._assertValidInput(siteId, itemId, qty, uom);
 
     return this.sequelize.transaction(async (t) => {
+      // Resolve FIRST (same dual-id funnel as dispatchItem): stock rows are
+      // anchored on the inventory-site id, but the UI often sends the HRM
+      // ProjectSite id. Without this, the lookup below finds no rows and the
+      // return is rejected with "Available at site: 0".
+      const site = await this._resolveInventorySite(siteId, t);
+      if (!site) throw new AppError("Site not found.", 404);
+      const inventorySiteId = site.id;
+
       // 1) Lock Product row
       const item = await this.productRepo.findById(itemId, {
         transaction: t,
@@ -306,17 +322,22 @@ class DispatchService {
       // 2) Lock & check the SITE's own balance before allowing the return.
       // The guard is site-specific on purpose: warehouse stock is irrelevant
       // here — a site can only send back what it actually holds.
-      const stockKey = { siteId, productId: itemId };
-      const siteStock = await this.siteStockRepo.findForUpdate(stockKey, t);
+      // ALL variant buckets of this (site, product) are summed: dispatches
+      // done via /movement land in per-variant buckets (manufacturer/color),
+      // so a single-bucket lookup would miss that stock and report 0.
+      const siteStockRows = await this.siteStockRepo.findAllForProductForUpdate(
+        { siteId: inventorySiteId, productId: itemId },
+        t,
+      );
 
       // Snap the stored balance to the same 3-dp grid before comparing so a
       // full "return everything" is never rejected by float residue.
-      const currentSiteStock = siteStock
-        ? this._round3(siteStock.inHandQty)
-        : 0;
+      const currentSiteStock = this._round3(
+        siteStockRows.reduce((sum, r) => sum + Number(r.inHandQty), 0),
+      );
 
       // Guard: never allow returning more than what the site actually holds
-      if (!siteStock || baseQty > currentSiteStock) {
+      if (baseQty > currentSiteStock) {
         throw new AppError(
           `Site ke paas return karne ke liye sufficient stock nahi hai. ` +
             `Available at site: ${currentSiteStock} ${item.base_uom}, ` +
@@ -325,9 +346,17 @@ class DispatchService {
         );
       }
 
-      // 3) Deduct the normalised base quantity from the site's live balance.
-      siteStock.inHandQty = this._round3(currentSiteStock - baseQty);
-      await siteStock.save({ transaction: t });
+      // 3) Deduct from the site's live balance — greedy drain, fullest bucket
+      // first (rows already arrive sorted DESC by inHandQty).
+      let remaining = baseQty;
+      for (const row of siteStockRows) {
+        if (remaining <= 0) break;
+        const rowQty = this._round3(row.inHandQty);
+        const take = Math.min(rowQty, remaining);
+        row.inHandQty = this._round3(rowQty - take);
+        await row.save({ transaction: t });
+        remaining = this._round3(remaining - take);
+      }
 
       // 4) Add the returned quantity back to main warehouse stock (base UOM).
       item.total_stock = this._round3(Number(item.total_stock) + baseQty);
@@ -337,7 +366,7 @@ class DispatchService {
       // typed (quantity + uom) AND the normalised base_quantity side by side.
       const log = await this.logRepo.logReturn(
         this._ledgerEntry({
-          siteId,
+          siteId: inventorySiteId,
           itemId,
           qty,
           uom,
@@ -354,7 +383,7 @@ class DispatchService {
         base_uom: item.base_uom,
         returned_in_base_uom: baseQty,
         remaining_warehouse_stock: Number(item.total_stock),
-        site_current_stock: Number(siteStock.inHandQty),
+        site_current_stock: this._round3(currentSiteStock - baseQty),
       };
     });
   }

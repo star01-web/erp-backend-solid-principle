@@ -50,6 +50,21 @@ class SiteStockRepository extends BaseRepository {
   }
 
   /**
+   * Fetch EVERY variant bucket of one (site, product) under an UPDATE lock,
+   * fullest first. Returns need this because dispatched stock can sit across
+   * multiple (manufacturer_id, color) buckets — a single-bucket lookup on the
+   * normalised (null, 'Standard') key misses them and reports 0 available.
+   */
+  findAllForProductForUpdate({ siteId, productId }, transaction) {
+    return this.model.findAll({
+      where: { siteId, ProductId: productId },
+      order: [["inHandQty", "DESC"]], // fullest bucket first (greedy drain)
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+  }
+
+  /**
    * Site-specific stock visibility: every item currently held at one site,
    * with the product's name/UOM joined in for display.
    */
