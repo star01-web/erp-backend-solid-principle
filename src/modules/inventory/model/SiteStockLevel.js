@@ -42,7 +42,9 @@ const SiteStockLevel = sequelize.define(
   {
     tableName: "inventory_site_stock_levels",
     timestamps: true,
-    underscored: true,
+    // NOTE: underscored NAHI — actual DB table camelCase columns use karta hai
+    // (siteId, ProductId, inHandQty, createdAt). `underscored: true` SQL me
+    // site_id/in_hand_qty generate karta tha jo "Unknown column" error deta tha.
     indexes: [
       {
         unique: true,

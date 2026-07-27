@@ -253,6 +253,31 @@ const updateProduct = async (req, res) => {
 
 // 2. STOCK MOVEMENT (Transactions & Core Inventory)
 
+/**
+ * Frontend se aane wala `site_id` do jagah ka id ho sakta hai:
+ *   1. `inventory_sites` (Site) ka id  — dispatch ledger/stock isi par anchor hai
+ *   2. HRM `ProjectSite` (geofence) ka id — site creation par dono rows saath
+ *      banti hain lekin IDs ALAG hote hain, aur UI aksar ProjectSite id bhejta hai.
+ * Ye helper dono handle karta hai: pehle inventory Site pk se, warna ProjectSite
+ * pk se locationName nikaal kar same naam ki inventory Site dhundta hai.
+ * Return: inventory `Site` row ya null.
+ */
+const resolveInventorySite = async (site_id, t) => {
+  let site = await db.Site.findByPk(site_id, { transaction: t });
+  if (site) return site;
+
+  const projSite = await db.ProjectSite.findByPk(site_id, {
+    transaction: t,
+  }).catch(() => null);
+  if (projSite?.locationName) {
+    site = await db.Site.findOne({
+      where: { site_name: projSite.locationName },
+      transaction: t,
+    });
+  }
+  return site;
+};
+
 const processStockMovement = async (req, res) => {
   const t = await db.sequelize.transaction();
 
@@ -272,6 +297,7 @@ const processStockMovement = async (req, res) => {
       vehicle_number,
       movement_date,
       remarks,
+      site_id, // OPTIONAL: OUTWARD/DISPATCH ke saath aaye toh site ledger + site stock bhi sync hoga
     } = req.body;
     const userId = req.user.id;
 
@@ -428,8 +454,73 @@ const processStockMovement = async (req, res) => {
       { transaction: t },
     );
 
+    // --- SITE SYNC (optional) ---
+    // Agar OUTWARD/DISPATCH ke saath site_id aaya hai, toh usi transaction me:
+    //   1. SiteDispatchLog me ek immutable DISPATCH ledger row likho, aur
+    //   2. SiteStockLevel.inHandQty me quantity add karo (find-or-create).
+    // Isse warehouse OUTWARD aur site-side stock hamesha ek saath move hote
+    // hain — koi bhi step fail ho toh poora movement rollback ho jata hai.
+    let siteDispatchLog = null;
+    let siteStockLevel = null;
+    if (site_id && isDeduction && moveType !== "SCRAP") {
+      // site_id inventory Site ka bhi ho sakta hai aur HRM ProjectSite ka bhi —
+      // resolver dono handle karta hai.
+      const site = await resolveInventorySite(site_id, t);
+      if (!site) {
+        await t.rollback();
+        return res
+          .status(404)
+          .json({ success: false, message: "Site not found." });
+      }
+
+      // 1) Site dispatch ledger entry (quantity product ke base UOM me hai —
+      // /movement route par UOM conversion nahi hota, isliye entered ==base).
+      siteDispatchLog = await db.SiteDispatchLog.create(
+        {
+          site_id: site.id,
+          item_id: productId,
+          transaction_type: "DISPATCH",
+          quantity: absQty,
+          uom: product.base_uom || product.unit || "pcs",
+          base_quantity: absQty,
+          transaction_date: movement_date || date || new Date(),
+          remarks: remarks || null,
+          created_by: userId,
+        },
+        { transaction: t },
+      );
+
+      // 2) Site stock level update — same variant bucket jisse stock nikla.
+      const siteStockWhere = {
+        siteId: site.id,
+        ProductId: productId,
+        manufacturer_id: logManufacturerId || null,
+        color: logColor || "Standard",
+      };
+      const [siteStock, created] = await db.SiteStockLevel.findOrCreate({
+        where: siteStockWhere,
+        defaults: { inHandQty: absQty },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (!created) {
+        await siteStock.update(
+          { inHandQty: Number(siteStock.inHandQty) + absQty },
+          { transaction: t },
+        );
+      }
+      siteStockLevel = siteStock;
+    }
+
     await t.commit();
-    return res.status(201).json({ success: true, data: transactionLog });
+    return res.status(201).json({
+      success: true,
+      data: transactionLog,
+      site_dispatch_log: siteDispatchLog,
+      site_current_stock: siteStockLevel
+        ? Number(siteStockLevel.inHandQty)
+        : undefined,
+    });
   } catch (error) {
     if (t) await t.rollback();
     return res.status(500).json({ success: false, message: error.message });
@@ -562,6 +653,8 @@ const bulkProcessStockMovement = async (req, res) => {
         manufacturer_id,
         color,
         unit_price,
+        remarks,
+        site_id, // OPTIONAL: OUTWARD/DISPATCH ke saath aaye toh site ledger + site stock bhi sync hoga
       } = item;
 
       if (!productId || !warehouseId || !quantity || !type) {
@@ -629,6 +722,60 @@ const bulkProcessStockMovement = async (req, res) => {
           let currentQty = Number(stockRecord.current_quantity || 0);
           currentQty += absQty;
           await stockRecord.update({ current_quantity: currentQty }, { transaction: t });
+        }
+      }
+
+      // --- SITE SYNC (optional, same pattern as processStockMovement) ---
+      // Agar OUTWARD/DISPATCH item ke saath site_id aaya hai, toh usi bulk
+      // transaction me site dispatch ledger + site stock level bhi update karo.
+      if (site_id && !isInwardType && movementType !== "SCRAP") {
+        // site_id inventory Site ka bhi ho sakta hai aur HRM ProjectSite ka
+        // bhi — resolver dono handle karta hai.
+        const site = await resolveInventorySite(site_id, t);
+        if (!site) {
+          throw new Error(`Site not found for site_id: ${site_id}`);
+        }
+
+        const product = await db.Product.findByPk(productId, {
+          transaction: t,
+        });
+
+        // 1) Immutable DISPATCH ledger row (quantity base UOM me maani jaati
+        // hai — bulk route par UOM conversion nahi hota).
+        await db.SiteDispatchLog.create(
+          {
+            site_id: site.id,
+            item_id: productId,
+            transaction_type: "DISPATCH",
+            quantity: absQty,
+            uom: product?.base_uom || product?.unit || "pcs",
+            base_quantity: absQty,
+            transaction_date: movement_date || date || new Date(),
+            remarks: remarks || null,
+            created_by: req.user.id,
+          },
+          { transaction: t },
+        );
+
+        // 2) Site stock level — same variant bucket jisse warehouse stock nikla.
+        const siteStockWhere = {
+          siteId: site.id,
+          ProductId: productId,
+          manufacturer_id:
+            manufacturer_id || stockRecord.manufacturer_id || null,
+          color: color || stockRecord.color || "Standard",
+        };
+        const [siteStock, created] = await db.SiteStockLevel.findOrCreate({
+          where: siteStockWhere,
+          defaults: { inHandQty: absQty },
+          transaction: t,
+          lock: t.LOCK.UPDATE,
+        });
+        if (!created) {
+          await siteStock.update(
+            { inHandQty: Number(siteStock.inHandQty) + absQty },
+            { transaction: t },
+          );
         }
       }
 
