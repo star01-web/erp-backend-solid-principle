@@ -972,4 +972,7 @@ module.exports = {
   getInventoryDashboard,
   getAvailableStock,
   getTransactionHistory,
+
+  // Helpers (siteReturn.controller bhi same site-id resolution use karta hai)
+  resolveInventorySite,
 };

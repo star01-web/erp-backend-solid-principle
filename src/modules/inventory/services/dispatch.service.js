@@ -25,12 +25,46 @@ class DispatchService {
     productRepository,
     siteDispatchLogRepository,
     siteStockRepository,
+    siteRepository,
+    projectSiteRepository,
     sequelize,
   }) {
     this.productRepo = productRepository;
     this.logRepo = siteDispatchLogRepository;
     this.siteStockRepo = siteStockRepository;
+    // Site master repos — dual-id resolution ke liye (niche dekho).
+    this.siteRepo = siteRepository;
+    this.projectSiteRepo = projectSiteRepository;
     this.sequelize = sequelize;
+  }
+
+  /**
+   * Frontend se aane wala `siteId` do jagah ka id ho sakta hai:
+   *   1. `inventory_sites` (Site) ka id — ledger/stock isi par anchor hai
+   *   2. HRM `ProjectSite` (geofence) ka id — site creation par dono rows
+   *      saath banti hain lekin IDs ALAG hote hain, aur UI aksar ProjectSite
+   *      id bhejta hai.
+   * Pehle inventory Site pk se try karo; warna ProjectSite ke locationName
+   * se same naam ki inventory Site dhundo. (Same resolution jo
+   * inventory.controller ka resolveInventorySite karta hai.)
+   * Return: inventory Site row ya null.
+   */
+  async _resolveInventorySite(siteId, t = null) {
+    const opts = t ? { transaction: t } : {};
+    let site = await this.siteRepo.findById(siteId, opts);
+    if (site) return site;
+
+    if (!this.projectSiteRepo) return null;
+    const projSite = await this.projectSiteRepo
+      .findById(siteId, opts)
+      .catch(() => null);
+    if (projSite?.locationName) {
+      site = await this.siteRepo.findOne(
+        { site_name: projSite.locationName },
+        opts,
+      );
+    }
+    return site;
   }
 
   // Parse + guard a movement quantity. Returns a positive Number, or null.
@@ -332,7 +366,12 @@ class DispatchService {
   async getSiteStock(siteId) {
     if (!siteId) throw new AppError("siteId param zaroori hai.", 400);
 
-    const rows = await this.siteStockRepo.getStockBySite(siteId);
+    // UI inventory-Site id ya HRM ProjectSite id — dono bhej sakta hai;
+    // stock rows resolved inventory-site id par hi padi hain.
+    const site = await this._resolveInventorySite(siteId);
+    if (!site) throw new AppError("Site not found.", 404);
+
+    const rows = await this.siteStockRepo.getStockBySite(site.id);
 
     const items = rows.map((r) => ({
       item_id: r.ProductId,
@@ -345,7 +384,9 @@ class DispatchService {
     }));
 
     return {
-      site_id: siteId,
+      site_id: site.id,
+      site_name: site.site_name,
+      project_name: site.project_name || null,
       item_count: items.length,
       items,
     };
@@ -358,7 +399,12 @@ class DispatchService {
   async getConsumptionReport(siteId) {
     if (!siteId) throw new AppError("siteId param zaroori hai.", 400);
 
-    const rows = await this.logRepo.getConsumptionBySite(siteId);
+    // Ledger rows inventory-site id par anchored hain; UI dono id bhej
+    // sakta hai, isliye pehle resolve karo.
+    const site = await this._resolveInventorySite(siteId);
+    if (!site) throw new AppError("Site not found.", 404);
+
+    const rows = await this.logRepo.getConsumptionBySite(site.id);
 
     const items = rows.map((r) => ({
       item_id: r.item_id,
@@ -371,8 +417,11 @@ class DispatchService {
     }));
 
     return {
-      site_id: siteId,
-      project_name: items.length ? items[0].project_name : null,
+      site_id: site.id,
+      site_name: site.site_name,
+      project_name: items.length
+        ? items[0].project_name
+        : site.project_name || null,
       item_count: items.length,
       items,
     };

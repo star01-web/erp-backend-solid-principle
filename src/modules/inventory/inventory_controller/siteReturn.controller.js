@@ -1,4 +1,5 @@
 const db = require("../../../common/index.db");
+const { resolveInventorySite } = require("./inventory.controller");
 
 /**
  * POST /site-return
@@ -26,10 +27,13 @@ const returnMaterialFromSite = async (req, res) => {
     } = req.body;
     const userId = req.user.id;
 
-    // Variant identity — StockLevel/SiteStockLevel ki unique key ka hissa,
-    // isliye dono jagah bilkul same values use hongi
+    // Variant identity — StockLevel/SiteStockLevel ki unique key ka hissa.
+    // NOTE: yahan sirf normalise karte hain; lookup me constraint TABHI lagti
+    // hai jab caller ne value bheji ho (warna "Blue" stock par "Standard"
+    // bucket dhundh kar jhootha Insufficient-stock error aata hai — wahi bug
+    // jo processStockMovement ke OUTWARD me fix hua tha).
     const variantManufacturerId = manufacturer_id || null;
-    const variantColor = color || "Standard";
+    const variantColor = color || null;
 
     // --- Input validation (fail fast, before touching any rows) ---
     if (!siteId || !ProductId || !WarehouseId || returnQty === undefined) {
@@ -58,9 +62,13 @@ const returnMaterialFromSite = async (req, res) => {
       });
     }
 
-    // Site aur Warehouse dono active hone chahiye
+    // Site aur Warehouse dono active hone chahiye.
+    // siteId inventory Site ka bhi ho sakta hai aur HRM ProjectSite (geofence)
+    // ka bhi — UI aksar ProjectSite id bhejta hai. Resolver dono handle karta
+    // hai; aage ke saare lookups RESOLVED inventory-site id par chalte hain
+    // (SiteStockLevel rows usi id par bante hain).
     const [site, warehouse] = await Promise.all([
-      db.Site.findByPk(siteId),
+      resolveInventorySite(siteId, t),
       db.Warehouse.findByPk(WarehouseId),
     ]);
     if (!site?.is_active || !warehouse?.is_active) {
@@ -70,38 +78,55 @@ const returnMaterialFromSite = async (req, res) => {
         message: "Site ya Warehouse active nahi hai.",
       });
     }
+    const inventorySiteId = site.id;
 
-    // --- STEP 1: Validate site stock for the EXACT variant (locked so a
-    // parallel return can't read the same balance and double-spend it) ---
-    const siteStock = await db.SiteStockLevel.findOne({
-      where: {
-        siteId,
-        ProductId,
-        manufacturer_id: variantManufacturerId,
-        color: variantColor,
-      },
+    // --- STEP 1: Validate site stock (locked so a parallel return can't read
+    // the same balance and double-spend it). Variant constraints sirf tab
+    // lagti hain jab caller ne bheji hon — warna site par jo bhi variant
+    // bucket(s) hain unhi se milaan hota hai. ---
+    const siteStockWhere = { siteId: inventorySiteId, ProductId };
+    if (variantManufacturerId) {
+      siteStockWhere.manufacturer_id = variantManufacturerId;
+    }
+    if (variantColor) siteStockWhere.color = variantColor;
+
+    const siteStockRows = await db.SiteStockLevel.findAll({
+      where: siteStockWhere,
+      order: [["inHandQty", "DESC"]], // fullest bucket first (greedy drain)
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
 
-    if (!siteStock || Number(siteStock.inHandQty) < qty) {
+    const totalAtSite = siteStockRows.reduce(
+      (sum, r) => sum + Number(r.inHandQty),
+      0,
+    );
+
+    if (totalAtSite < qty) {
       await t.rollback();
       return res.status(400).json({
         success: false,
-        message: `Insufficient site stock for this variant (color: ${variantColor}). Available: ${
-          siteStock ? siteStock.inHandQty : 0
-        }, Requested: ${qty}.`,
+        message: `Insufficient site stock${
+          variantColor ? ` for this variant (color: ${variantColor})` : ""
+        }. Available: ${totalAtSite}, Requested: ${qty}.`,
       });
     }
+
+    // Audit/ledger rows me REAL source bucket ki variant identity jaaye —
+    // caller ne di ho toh wahi, warna jis bucket se sabse pehle kata us ki.
+    const primaryBucket = siteStockRows[0];
+    const logManufacturerId =
+      variantManufacturerId || primaryBucket.manufacturer_id || null;
+    const logColor = variantColor || primaryBucket.color || "Standard";
 
     // --- STEP 2: Log the return event (variant captured for audit) ---
     const materialReturn = await db.SiteMaterialReturn.create(
       {
-        siteId,
+        siteId: inventorySiteId,
         ProductId,
         WarehouseId,
-        manufacturer_id: variantManufacturerId,
-        color: variantColor,
+        manufacturer_id: logManufacturerId,
+        color: logColor,
         returnQty: qty,
         returnDate: returnDate || new Date(),
         condition: condition || "Good",
@@ -120,8 +145,8 @@ const returnMaterialFromSite = async (req, res) => {
         date: materialReturn.returnDate,
         ProductId,
         WarehouseId,
-        manufacturer_id: variantManufacturerId,
-        color: variantColor,
+        manufacturer_id: logManufacturerId,
+        color: logColor,
         type: "RETURN",
         quantity: qty,
         reference_no: "SITE_RETURN-" + materialReturn.id,
@@ -131,8 +156,34 @@ const returnMaterialFromSite = async (req, res) => {
       { transaction: t },
     );
 
-    // --- STEP 4: Deduct from the site ledger (atomic SQL decrement) ---
-    await siteStock.decrement("inHandQty", { by: qty, transaction: t });
+    // --- STEP 3b: Site dispatch ledger me bhi RETURN row — taaki site ki net
+    // consumption report (DISPATCH - RETURN) is return ko bhi gine. ---
+    const productRow = await db.Product.findByPk(ProductId, { transaction: t });
+    await db.SiteDispatchLog.create(
+      {
+        site_id: inventorySiteId,
+        item_id: ProductId,
+        transaction_type: "RETURN",
+        quantity: qty,
+        uom: productRow?.base_uom || productRow?.unit || "pcs",
+        base_quantity: qty,
+        transaction_date: materialReturn.returnDate,
+        remarks: remarks || null,
+        created_by: userId,
+      },
+      { transaction: t },
+    );
+
+    // --- STEP 4: Deduct from the site ledger — greedy drain across the
+    // matched bucket(s), fullest first (same pattern as OUTWARD deduction) ---
+    let remaining = qty;
+    for (const row of siteStockRows) {
+      if (remaining <= 0) break;
+      const take = Math.min(Number(row.inHandQty), remaining);
+      if (take <= 0) continue;
+      await row.decrement("inHandQty", { by: take, transaction: t });
+      remaining -= take;
+    }
 
     // --- STEP 5: Add to main warehouse stock for the SAME variant, so the
     // material lands back in the exact (Product, Manufacturer, Color) bucket
@@ -141,8 +192,8 @@ const returnMaterialFromSite = async (req, res) => {
       where: {
         ProductId,
         WarehouseId,
-        manufacturer_id: variantManufacturerId,
-        color: variantColor,
+        manufacturer_id: logManufacturerId,
+        color: logColor,
       },
       defaults: { current_quantity: 0 },
       transaction: t,
