@@ -15,6 +15,16 @@ const createProductSchema = z
   .object({
     sku_code: nonEmpty("SKU Code aur Product Name mandatory hain."),
     name: nonEmpty("SKU Code aur Product Name mandatory hain."),
+    // --- Multi-UOM (optional; shape-only — cross-field rules like
+    // "factor mandatory jab purchase_uom ho" controller me hain) ---
+    base_uom: z.string().trim().min(1).optional(),
+    purchase_uom: z.string().trim().min(1).nullable().optional(),
+    conversion_factor: z
+      .union([z.number(), z.string().min(1)], {
+        error:
+          "conversion_factor ek positive number hona chahiye (1 purchase_uom me kitne base_uom).",
+      })
+      .optional(),
   })
   .loose();
 
@@ -77,6 +87,23 @@ const siteReturnSchema = z
   })
   .loose();
 
+// --- Site creation (dual-table: inventory_sites + HRM ProjectSite) ---
+// Presence/shape only — coordinate range checks and trimming live in SiteService.
+const numeric = (message) =>
+  z.union([z.number(), z.string().min(1)], { error: message });
+
+const createSiteSchema = z
+  .object({
+    site_name: nonEmpty("site_name mandatory field hai."),
+    latitude: numeric(
+      "latitude aur longitude valid numbers hone chahiye (geofence ke liye zaroori).",
+    ),
+    longitude: numeric(
+      "latitude aur longitude valid numbers hone chahiye (geofence ke liye zaroori).",
+    ),
+  })
+  .loose();
+
 // --- Site dispatch ledger (dispatch + return share the same shape) ---
 const DISPATCH_MSG =
   "site_id, item_id, uom aur ek valid positive quantity zaroori hai.";
@@ -99,5 +126,6 @@ module.exports = {
   createMovementSchema,
   bulkMovementSchema,
   siteReturnSchema,
+  createSiteSchema,
   dispatchLedgerSchema,
 };

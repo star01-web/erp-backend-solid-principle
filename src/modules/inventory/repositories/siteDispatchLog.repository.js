@@ -18,10 +18,10 @@ class SiteDispatchLogRepository extends BaseRepository {
   }
 
   /**
-   * 1. NEW: Transaction-safe Outward Dispatch Logging
-   * Automatically injects 'DISPATCH' transaction_type and handles UOM normalization.
-   * 
-   * @param {Object} logData - { site_id, item_id, quantity, base_quantity, challan_number, etc. }
+   * 1. Transaction-safe Outward Dispatch Logging
+   * Automatically injects 'DISPATCH' transaction_type.
+   *
+   * @param {Object} logData - { site_id, item_id, quantity, uom, base_quantity, remarks, created_by }
    * @param {Object} options - Sequelize options (must include { transaction: t })
    */
   async logDispatch(logData, options = {}) {
@@ -29,17 +29,17 @@ class SiteDispatchLogRepository extends BaseRepository {
       {
         ...logData,
         transaction_type: "DISPATCH",
-        dispatch_date: logData.dispatch_date || new Date(),
+        transaction_date: logData.transaction_date || new Date(),
       },
-      options
+      options,
     );
   }
 
   /**
-   * 2. NEW: Transaction-safe Material Return Logging
+   * 2. Transaction-safe Material Return Logging
    * Automatically injects 'RETURN' transaction_type for inward flows from site.
-   * 
-   * @param {Object} logData - { site_id, item_id, quantity, base_quantity, return_challan, etc. }
+   *
+   * @param {Object} logData - { site_id, item_id, quantity, uom, base_quantity, remarks, created_by }
    * @param {Object} options - Sequelize options (must include { transaction: t })
    */
   async logReturn(logData, options = {}) {
@@ -47,9 +47,9 @@ class SiteDispatchLogRepository extends BaseRepository {
       {
         ...logData,
         transaction_type: "RETURN",
-        return_date: logData.return_date || new Date(),
+        transaction_date: logData.transaction_date || new Date(),
       },
-      options
+      options,
     );
   }
 
@@ -100,8 +100,12 @@ class SiteDispatchLogRepository extends BaseRepository {
       include: [
         // item_name + base_uom (from inventory_products)
         { model: db.Product, as: "item", attributes: ["name", "base_uom"] },
-        // project_name (from inventory_sites)
-        { model: db.Site, as: "site", attributes: ["project_name", "name"] },
+        // project_name + site_name (from inventory_sites)
+        {
+          model: db.Site,
+          as: "site",
+          attributes: ["project_name", "site_name"],
+        },
       ],
       // Every non-aggregated selected column is grouped to satisfy MySQL's ONLY_FULL_GROUP_BY mode.
       group: [
@@ -111,7 +115,7 @@ class SiteDispatchLogRepository extends BaseRepository {
         "item.base_uom",
         "site.id",
         "site.project_name",
-        "site.name",
+        "site.site_name",
       ],
       order: [[literal("net_consumed_in_base_uom"), "DESC"]], // heaviest consumers first
       raw: true,

@@ -9,7 +9,7 @@ const AppError = require("../../../common/AppError");
  * not on models directly, except for the transaction handle which the shared
  * `sequelize` instance provides.
  *
- * Multi-UOM rule: Product.total_stock, SiteStockLevel.current_stock and every
+ * Multi-UOM rule: Product.total_stock, SiteStockLevel.inHandQty and every
  * stock calculation live in the item's BASE uom. An entry may arrive in base_uom
  * or purchase_uom; this service converts it to base_quantity BEFORE any validation
  * or mutation, so the stock counter can never mix units.
@@ -39,6 +39,17 @@ class DispatchService {
     return Number.isFinite(q) && q > 0 ? q : null;
   }
 
+  /**
+   * Canonical 3-dp rounding — the ONE precision used everywhere.
+   * Every stock column is DECIMAL(15,3), so all in-memory math must collapse
+   * to the same 3 dp grid before compare/store. Without this, binary-float
+   * drift (0.1 + 0.2 !== 0.3) slowly desyncs the in-memory counters from the
+   * DB and can reject a legitimate "return everything" by a 1e-14 hair.
+   */
+  _round3(n) {
+    return Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
+  }
+
   _assertValidInput(siteId, itemId, qty, uom) {
     if (!siteId || !itemId || qty === null || !uom) {
       throw new AppError(
@@ -46,6 +57,25 @@ class DispatchService {
         400,
       );
     }
+  }
+
+  /**
+   * Shared ledger-row shape for both movement directions. The entered
+   * quantity + uom are stored verbatim (what the user typed: "2 Bundle",
+   * "120 Meter") alongside the normalised base_quantity, so the ledger is
+   * auditable in the user's language AND aggregatable in base UOM.
+   */
+  _ledgerEntry({ siteId, itemId, qty, uom, baseQty, transactionDate, remarks, userId }) {
+    return {
+      site_id: siteId,
+      item_id: itemId,
+      quantity: qty,
+      uom,
+      base_quantity: baseQty,
+      transaction_date: transactionDate || new Date(),
+      remarks: remarks || null,
+      created_by: userId || null,
+    };
   }
 
   // Case-insensitive UOM compare (trims stray whitespace from the payload).
@@ -58,17 +88,32 @@ class DispatchService {
   }
 
   /**
-   * Convert an entered (quantity, uom) into the item's base UOM.
-   *   uom === base_uom       -> base_quantity = quantity
+   * Universal UOM normalisation — the single funnel through which EVERY
+   * movement (DISPATCH and RETURN alike) passes before any validation or
+   * stock math. Returns are deliberately symmetric with dispatches: material
+   * issued as "2 Bundle" can come back as "100 Meter", "1.5 Bundle", or
+   * "37.25 Meter" and all of it lands on the same base-UOM number line.
+   *
+   *   uom === base_uom       -> base_quantity = quantity            (no factor!)
    *   uom === purchase_uom   -> base_quantity = quantity * conversion_factor
    *   anything else          -> reject (unknown unit for this item)
-   * Returns a rounded base_quantity (3 dp, matching the DECIMAL(15,3) column).
+   *
+   * Example (Rope: base 'Meter', purchase 'Bundle', factor 50):
+   *   ('120', 'Meter')  -> 120     — raw meters pass through untouched
+   *   (2,     'Bundle') -> 100     — 2 * 50
+   *   (1.5,   'bundle') -> 75      — case-insensitive, fractional bundles OK
+   *
+   * Both branches round to the canonical 3-dp grid (DECIMAL(15,3)) so the
+   * number we validate against, mutate stock with, and store in the ledger
+   * is byte-for-byte the same one the DB holds.
    */
   _toBaseQuantity(item, quantity, uom) {
+    let baseQty;
     if (this._uomMatches(uom, item.base_uom)) {
-      return Number(quantity);
-    }
-    if (item.purchase_uom && this._uomMatches(uom, item.purchase_uom)) {
+      // Already in base units — use the raw quantity directly. Multiplying
+      // here would double-convert a "120 Meter" return into 6000 Meters.
+      baseQty = this._round3(quantity);
+    } else if (item.purchase_uom && this._uomMatches(uom, item.purchase_uom)) {
       const factor = Number(item.conversion_factor);
       if (!Number.isFinite(factor) || factor <= 0) {
         throw new AppError(
@@ -76,14 +121,26 @@ class DispatchService {
           400,
         );
       }
-      // Round to 3 dp so we store exactly what the DECIMAL(15,3) column holds.
-      return Math.round(Number(quantity) * factor * 1000) / 1000;
+      baseQty = this._round3(Number(quantity) * factor);
+    } else {
+      throw new AppError(
+        `Invalid uom '${uom}' for item '${item.name}'. Allowed: ` +
+          `'${item.base_uom}'${item.purchase_uom ? ` or '${item.purchase_uom}'` : ""}.`,
+        400,
+      );
     }
-    throw new AppError(
-      `Invalid uom '${uom}' for item '${item.name}'. Allowed: ` +
-        `'${item.base_uom}'${item.purchase_uom ? ` or '${item.purchase_uom}'` : ""}.`,
-      400,
-    );
+
+    // A movement that rounds to zero (e.g. 0.0004 Bundle) can neither be
+    // stored (ledger validates min 0.001) nor affect stock — reject it here
+    // with a clean message instead of a low-level Sequelize validation error.
+    if (baseQty < 0.001) {
+      throw new AppError(
+        `Quantity is too small: ${quantity} ${uom} converts to less than ` +
+          `0.001 ${item.base_uom}.`,
+        400,
+      );
+    }
+    return baseQty;
   }
 
   /**
@@ -92,7 +149,7 @@ class DispatchService {
    *  - Validates base_quantity <= Product.total_stock (prevents negative warehouse stock)
    *  - Deducts base_quantity from Product.total_stock (base UOM)
    *  - Appends a 'DISPATCH' ledger row
-   *  - NEW: Adds base_quantity to SiteStockLevel (finds or creates site inventory row)
+   *  - Adds base_quantity to SiteStockLevel.inHandQty (finds or creates site inventory row)
    */
   async dispatchItem({
     siteId,
@@ -119,7 +176,10 @@ class DispatchService {
 
       // Everything below is in BASE uom.
       const baseQty = this._toBaseQuantity(item, qty, uom);
-      const currentStock = Number(item.total_stock);
+      // Snap the stored balance to the canonical 3-dp grid before comparing,
+      // mirroring the return-side guard, so "dispatch everything" never fails
+      // on float residue.
+      const currentStock = this._round3(item.total_stock);
 
       // Guard: never let warehouse stock go negative.
       if (baseQty > currentStock) {
@@ -131,45 +191,39 @@ class DispatchService {
       }
 
       // 1) Deduct from the main warehouse stock counter (base UOM).
-      item.total_stock = currentStock - baseQty;
+      // Re-round after the subtraction: currentStock and baseQty are each on
+      // the 3-dp grid, but their float difference may not be (0.3 - 0.1).
+      item.total_stock = this._round3(currentStock - baseQty);
       await item.save({ transaction: t });
 
       // 2) Append the immutable DISPATCH ledger entry (both entered + base).
-      const log = await this.logRepo.create(
-        {
-          site_id: siteId,
-          item_id: itemId,
-          transaction_type: "DISPATCH",
-          quantity: qty,
+      const log = await this.logRepo.logDispatch(
+        this._ledgerEntry({
+          siteId,
+          itemId,
+          qty,
           uom,
-          base_quantity: baseQty,
-          transaction_date: transactionDate || new Date(),
-          remarks: remarks || null,
-          created_by: userId || null,
-        },
+          baseQty,
+          transactionDate,
+          remarks,
+          userId,
+        }),
         { transaction: t },
       );
 
-      // 3) NEW: Update Site Stock Level (Increment or Create)
-      let siteStock = await this.siteStockRepo.findOne({
-        where: { site_id: siteId, item_id: itemId },
-        transaction: t,
-        lock: t.LOCK.UPDATE, // Lock site row to prevent race conditions
-      });
+      // 3) Increment the live per-site balance (find-or-create under lock).
+      // Repository handles variant-key normalisation; we stay in base UOM.
+      const stockKey = { siteId, productId: itemId };
+      let siteStock = await this.siteStockRepo.findForUpdate(stockKey, t);
 
       if (!siteStock) {
         // First time material is arriving at this site
-        siteStock = await this.siteStockRepo.create(
-          {
-            site_id: siteId,
-            item_id: itemId,
-            current_stock: baseQty,
-          },
-          { transaction: t },
-        );
+        siteStock = await this.siteStockRepo.createForSite(stockKey, baseQty, t);
       } else {
         // Material already exists at site, add to current stock
-        siteStock.current_stock = Number(siteStock.current_stock) + baseQty;
+        siteStock.inHandQty = this._round3(
+          Number(siteStock.inHandQty) + baseQty,
+        );
         await siteStock.save({ transaction: t });
       }
 
@@ -177,7 +231,7 @@ class DispatchService {
         log,
         base_uom: item.base_uom,
         remaining_warehouse_stock: Number(item.total_stock),
-        site_current_stock: Number(siteStock.current_stock),
+        site_current_stock: Number(siteStock.inHandQty),
       };
     });
   }
@@ -185,8 +239,9 @@ class DispatchService {
   /**
    * Material coming back from a site into warehouse stock.
    *  - Converts entered qty/uom to base_quantity
-   *  - NEW: Validates base_quantity <= SiteStockLevel.current_stock (prevents phantom returns)
-   *  - NEW: Deducts base_quantity from SiteStockLevel
+   *  - Validates base_quantity <= SiteStockLevel.inHandQty (prevents phantom returns;
+   *    checks SITE stock, never warehouse stock)
+   *  - Deducts base_quantity from SiteStockLevel.inHandQty
    *  - Adds base_quantity back to Product.total_stock (base UOM)
    *  - Appends a 'RETURN' ledger row
    */
@@ -210,57 +265,90 @@ class DispatchService {
       });
       if (!item) throw new AppError("Item (Product) not found.", 404);
 
+      // Universal normalisation — the SAME funnel dispatches use, so a
+      // return entered as "120 Meter" stays 120, and "2 Bundle" becomes 100.
       const baseQty = this._toBaseQuantity(item, qty, uom);
 
-      // 2) NEW: Lock & Check Site Stock Level before allowing return
-      const siteStock = await this.siteStockRepo.findOne({
-        where: { site_id: siteId, item_id: itemId },
-        transaction: t,
-        lock: t.LOCK.UPDATE,
-      });
+      // 2) Lock & check the SITE's own balance before allowing the return.
+      // The guard is site-specific on purpose: warehouse stock is irrelevant
+      // here — a site can only send back what it actually holds.
+      const stockKey = { siteId, productId: itemId };
+      const siteStock = await this.siteStockRepo.findForUpdate(stockKey, t);
 
-      const currentSiteStock = siteStock ? Number(siteStock.current_stock) : 0;
+      // Snap the stored balance to the same 3-dp grid before comparing so a
+      // full "return everything" is never rejected by float residue.
+      const currentSiteStock = siteStock
+        ? this._round3(siteStock.inHandQty)
+        : 0;
 
       // Guard: never allow returning more than what the site actually holds
-      if (baseQty > currentSiteStock) {
+      if (!siteStock || baseQty > currentSiteStock) {
         throw new AppError(
           `Site ke paas return karne ke liye sufficient stock nahi hai. ` +
-            `Available at site: ${currentSiteStock} ${item.base_uom}, Requested Return: ${baseQty} ${item.base_uom}.`,
+            `Available at site: ${currentSiteStock} ${item.base_uom}, ` +
+            `Requested Return: ${qty} ${uom} (= ${baseQty} ${item.base_uom}).`,
           400,
         );
       }
 
-      // 3) NEW: Deduct from Site Stock Level
-      siteStock.current_stock = currentSiteStock - baseQty;
+      // 3) Deduct the normalised base quantity from the site's live balance.
+      siteStock.inHandQty = this._round3(currentSiteStock - baseQty);
       await siteStock.save({ transaction: t });
 
       // 4) Add the returned quantity back to main warehouse stock (base UOM).
-      item.total_stock = Number(item.total_stock) + baseQty;
+      item.total_stock = this._round3(Number(item.total_stock) + baseQty);
       await item.save({ transaction: t });
 
-      // 5) Append the immutable RETURN ledger entry.
-      const log = await this.logRepo.create(
-        {
-          site_id: siteId,
-          item_id: itemId,
-          transaction_type: "RETURN",
-          quantity: qty,
+      // 5) Append the immutable RETURN ledger entry — stores what the user
+      // typed (quantity + uom) AND the normalised base_quantity side by side.
+      const log = await this.logRepo.logReturn(
+        this._ledgerEntry({
+          siteId,
+          itemId,
+          qty,
           uom,
-          base_quantity: baseQty,
-          transaction_date: transactionDate || new Date(),
-          remarks: remarks || null,
-          created_by: userId || null,
-        },
+          baseQty,
+          transactionDate,
+          remarks,
+          userId,
+        }),
         { transaction: t },
       );
 
       return {
         log,
         base_uom: item.base_uom,
+        returned_in_base_uom: baseQty,
         remaining_warehouse_stock: Number(item.total_stock),
-        site_current_stock: Number(siteStock.current_stock),
+        site_current_stock: Number(siteStock.inHandQty),
       };
     });
+  }
+
+  /**
+   * Site-specific stock visibility: what does ONE site currently hold?
+   * Read-only — no transaction needed. Numbers are already in base UOM.
+   */
+  async getSiteStock(siteId) {
+    if (!siteId) throw new AppError("siteId param zaroori hai.", 400);
+
+    const rows = await this.siteStockRepo.getStockBySite(siteId);
+
+    const items = rows.map((r) => ({
+      item_id: r.ProductId,
+      item_name: r.Product ? r.Product.name : null,
+      sku_code: r.Product ? r.Product.sku_code : null,
+      base_uom: r.Product ? r.Product.base_uom : null,
+      color: r.color,
+      manufacturer_id: r.manufacturer_id,
+      current_stock: Number(r.inHandQty) || 0,
+    }));
+
+    return {
+      site_id: siteId,
+      item_count: items.length,
+      items,
+    };
   }
 
   /**

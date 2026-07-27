@@ -70,4 +70,18 @@ router.get(
   ),
 );
 
+/**
+ * @route   GET /v2/api/inventory/ledger/site-stock/:siteId
+ * @desc    Site-specific stock visibility — live balances (base UOM) of every
+ *          item currently held at one site (from inventory_site_stock_levels).
+ * @access  Private (Any Authenticated User)
+ */
+router.get(
+  "/ledger/site-stock/:siteId",
+  verifyToken,
+  asyncHandler((req, res, next) =>
+    dispatchController.getSiteStock(req, res, next),
+  ),
+);
+
 module.exports = router;

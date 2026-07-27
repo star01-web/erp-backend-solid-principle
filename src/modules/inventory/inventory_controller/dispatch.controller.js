@@ -133,6 +133,27 @@ class DispatchController {
       return this._fail(res, error, "Failed to build consumption report", next);
     }
   };
+
+  // GET /ledger/site-stock/:siteId — live balances held at one site
+  getSiteStock = async (req, res, next) => {
+    try {
+      const { siteId } = req.params;
+
+      if (!siteId) {
+        throw new AppError("URL param me siteId mandatory hai.", 400);
+      }
+
+      const stock = await this.service.getSiteStock(siteId);
+
+      return res.status(200).json({
+        success: true,
+        message: "Site stock levels fetched successfully.",
+        ...stock,
+      });
+    } catch (error) {
+      return this._fail(res, error, "Failed to fetch site stock levels", next);
+    }
+  };
 }
 
 module.exports = DispatchController;

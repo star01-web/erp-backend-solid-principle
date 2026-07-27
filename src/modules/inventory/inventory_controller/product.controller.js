@@ -1,6 +1,58 @@
 const db = require("../../../common/index.db");
 const { Op } = require("sequelize");
 
+/**
+ * Multi-UOM trio parse + validate (create & bulk-create dono use karte hain).
+ *
+ * User product add karte waqt khud batata hai ki 1 purchase unit me kitne
+ * base units hain — e.g. Rope 20mm: base 'Meter', purchase 'Bundle',
+ * conversion_factor 100 (1 Bundle = 100 Meter); Rope 10mm: factor 220.
+ * Yahi factor aage DispatchService ke saare dispatch/return calculations
+ * me use hota hai, isliye yahin strict validate hota hai.
+ *
+ * Returns { values } on success, { error } (message string) on failure.
+ */
+const resolveUomFields = ({ base_uom, purchase_uom, conversion_factor }) => {
+  const base = base_uom ? String(base_uom).trim() : "pcs";
+  const purchase = purchase_uom ? String(purchase_uom).trim() : null;
+
+  // Purchase unit nahi hai -> single-UOM item, factor hamesha 1.
+  if (!purchase) {
+    if (
+      conversion_factor !== undefined &&
+      conversion_factor !== null &&
+      Number(conversion_factor) !== 1
+    ) {
+      return {
+        error:
+          "conversion_factor tabhi set karein jab purchase_uom bhi diya ho " +
+          "(e.g. purchase_uom: 'Bundle', conversion_factor: 100).",
+      };
+    }
+    return { values: { base_uom: base, purchase_uom: null, conversion_factor: 1 } };
+  }
+
+  if (purchase.toLowerCase() === base.toLowerCase()) {
+    return {
+      error: `purchase_uom aur base_uom same ('${base}') nahi ho sakte.`,
+    };
+  }
+
+  // Purchase unit hai -> user ko batana hi hoga ki 1 purchase = kitne base.
+  const factor = Number(conversion_factor);
+  if (!Number.isFinite(factor) || factor <= 0) {
+    return {
+      error:
+        `conversion_factor mandatory hai jab purchase_uom set ho — ` +
+        `batayein 1 ${purchase} me kitne ${base} hote hain (positive number).`,
+    };
+  }
+
+  return {
+    values: { base_uom: base, purchase_uom: purchase, conversion_factor: factor },
+  };
+};
+
 const createProduct = async (req, res) => {
   try {
     const {
@@ -13,6 +65,10 @@ const createProduct = async (req, res) => {
       unit,
       min_stock_level,
       max_stock_level,
+      // --- Multi-UOM (free-hand per product) ---
+      base_uom,
+      purchase_uom,
+      conversion_factor,
     } = req.body;
 
     // 1. Basic Validation
@@ -21,6 +77,12 @@ const createProduct = async (req, res) => {
         success: false,
         message: "SKU Code aur Product Name mandatory hain.",
       });
+    }
+
+    // 1b. Multi-UOM validation — factor product add karte waqt hi lock hota hai.
+    const uomResult = resolveUomFields({ base_uom, purchase_uom, conversion_factor });
+    if (uomResult.error) {
+      return res.status(400).json({ success: false, message: uomResult.error });
     }
 
     const standardizedSKU = sku_code.trim().toUpperCase();
@@ -62,6 +124,8 @@ const createProduct = async (req, res) => {
       min_stock_level: min_stock_level || 5,
       max_stock_level: max_stock_level || 1000,
       is_active: true,
+      // Multi-UOM: e.g. Rope 20mm -> Meter/Bundle/100, Rope 10mm -> Meter/Bundle/220
+      ...uomResult.values,
     });
 
     // 4. Pivot Table mein Manufacturers Map Karein (Many-to-Many)
@@ -103,6 +167,10 @@ const bulkCreateProducts = async (req, res) => {
         unit,
         min_stock_level,
         max_stock_level,
+        // --- Multi-UOM (free-hand per product) ---
+        base_uom,
+        purchase_uom,
+        conversion_factor,
       } = item;
 
       // 1. Basic Row Validation
@@ -110,6 +178,16 @@ const bulkCreateProducts = async (req, res) => {
         throw new Error(
           `Row ${index + 1}: SKU Code aur Product Name mandatory hain.`,
         );
+      }
+
+      // 1b. Multi-UOM row validation
+      const uomResult = resolveUomFields({
+        base_uom,
+        purchase_uom,
+        conversion_factor,
+      });
+      if (uomResult.error) {
+        throw new Error(`Row ${index + 1}: ${uomResult.error}`);
       }
 
       const standardizedSKU = sku_code.trim().toUpperCase();
@@ -156,6 +234,8 @@ const bulkCreateProducts = async (req, res) => {
           min_stock_level: min_stock_level || 5,
           max_stock_level: max_stock_level || 1000,
           is_active: true,
+          // Multi-UOM: har SKU apna khud ka factor rakhta hai
+          ...uomResult.values,
         },
         { transaction: t },
       );
@@ -233,6 +313,51 @@ const updateProduct = async (req, res) => {
           message: `Is product ka ${totalStock} unit stock abhi warehouses mein bacha hai. Ise Inactive nahi kiya ja sakta.`,
         });
       }
+    }
+
+    // MULTI-UOM SAFETY CHECK — total_stock aur saare ledger base_quantity
+    // base_uom me stored hain. Stock bacha ho to base_uom ya conversion_factor
+    // badalna purane numbers ka matlab hi badal dega (100 'Meter' achanak
+    // 100 'Feet' ban jayega), isliye pehle stock zero karna zaroori hai.
+    const uomTouched =
+      updateData.base_uom !== undefined ||
+      updateData.purchase_uom !== undefined ||
+      updateData.conversion_factor !== undefined;
+
+    if (uomTouched) {
+      const uomResult = resolveUomFields({
+        base_uom: updateData.base_uom ?? product.base_uom,
+        purchase_uom:
+          updateData.purchase_uom !== undefined
+            ? updateData.purchase_uom
+            : product.purchase_uom,
+        conversion_factor:
+          updateData.conversion_factor !== undefined
+            ? updateData.conversion_factor
+            : product.conversion_factor,
+      });
+      if (uomResult.error) {
+        return res.status(400).json({ success: false, message: uomResult.error });
+      }
+
+      const baseUomChanging =
+        uomResult.values.base_uom.toLowerCase() !==
+        String(product.base_uom).toLowerCase();
+      const factorChanging =
+        Number(uomResult.values.conversion_factor) !==
+        Number(product.conversion_factor);
+
+      if ((baseUomChanging || factorChanging) && Number(product.total_stock) > 0) {
+        return res.status(400).json({
+          success: false,
+          message:
+            `Is product ka ${product.total_stock} ${product.base_uom} stock bacha hai. ` +
+            `base_uom/conversion_factor badalne se pehle stock zero karein, ` +
+            `warna purane stock/ledger numbers galat ho jayenge.`,
+        });
+      }
+
+      Object.assign(updateData, uomResult.values);
     }
 
     // Trimming fields before update (Color ko stringFields se hata diya gaya hai)
