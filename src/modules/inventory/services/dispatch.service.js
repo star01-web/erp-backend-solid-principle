@@ -25,6 +25,8 @@ class DispatchService {
     productRepository,
     siteDispatchLogRepository,
     siteStockRepository,
+    siteMaterialReturnRepository,
+    warehouseRepository,
     siteRepository,
     projectSiteRepository,
     sequelize,
@@ -32,6 +34,10 @@ class DispatchService {
     this.productRepo = productRepository;
     this.logRepo = siteDispatchLogRepository;
     this.siteStockRepo = siteStockRepository;
+    // Site Material Return audit table — har return isme bhi ek row likhta
+    // hai (report/history isi table se aati hai).
+    this.siteMaterialReturnRepo = siteMaterialReturnRepository;
+    this.warehouseRepo = warehouseRepository;
     // Site master repos — dual-id resolution ke liye (niche dekho).
     this.siteRepo = siteRepository;
     this.projectSiteRepo = projectSiteRepository;
@@ -295,9 +301,21 @@ class DispatchService {
     remarks,
     transactionDate,
     userId,
+    warehouseId,
+    condition,
   }) {
     const qty = this._parsePositiveQty(quantity);
     this._assertValidInput(siteId, itemId, qty, uom);
+
+    // Return ki haalat — SiteMaterialReturn ENUM se match honi chahiye,
+    // warna insert DB-level error par girta (aur poora return rollback hota).
+    const ALLOWED_CONDITIONS = ["Good", "Damaged", "Scrap"];
+    if (condition && !ALLOWED_CONDITIONS.includes(condition)) {
+      throw new AppError(
+        `condition '${ALLOWED_CONDITIONS.join("' | '")}' mein se ek honi chahiye.`,
+        400,
+      );
+    }
 
     return this.sequelize.transaction(async (t) => {
       // Resolve FIRST (same dual-id funnel as dispatchItem): stock rows are
@@ -378,8 +396,58 @@ class DispatchService {
         { transaction: t },
       );
 
+      // 6) Site Material Return audit row (inventory_site_material_returns).
+      // Yehi table return report/history dikhata hai — pehle sirf ledger row
+      // ban rahi thi aur ye table khali reh jata tha (wahi bug). WarehouseId
+      // NOT NULL hai, isliye caller ka warehouse_id lo warna pehla active
+      // warehouse fallback (return warehouse-agnostic Product.total_stock me
+      // hi jata hai, isliye fallback safe hai).
+      let materialReturn = null;
+      if (this.siteMaterialReturnRepo) {
+        let warehouse = null;
+        if (warehouseId) {
+          warehouse = await this.warehouseRepo?.findById(warehouseId, {
+            transaction: t,
+          });
+          if (!warehouse) {
+            throw new AppError("Warehouse not found for warehouse_id.", 404);
+          }
+        } else {
+          warehouse = await this.warehouseRepo?.findOne(
+            { is_active: true },
+            { transaction: t },
+          );
+        }
+        if (!warehouse) {
+          throw new AppError(
+            "Koi active warehouse nahi mila — return record karne ke liye warehouse_id bhejein.",
+            400,
+          );
+        }
+
+        // Variant identity: jis bucket se sabse pehle kata (fullest first),
+        // us ki manufacturer/color audit row me capture hoti hai.
+        const primaryBucket = siteStockRows[0] || {};
+        materialReturn = await this.siteMaterialReturnRepo.create(
+          {
+            siteId: inventorySiteId,
+            ProductId: itemId,
+            WarehouseId: warehouse.id,
+            manufacturer_id: primaryBucket.manufacturer_id || null,
+            color: primaryBucket.color || "Standard",
+            returnQty: baseQty,
+            returnDate: transactionDate || new Date(),
+            condition: condition || "Good",
+            remarks: remarks || null,
+            created_by: userId,
+          },
+          { transaction: t },
+        );
+      }
+
       return {
         log,
+        material_return: materialReturn,
         base_uom: item.base_uom,
         returned_in_base_uom: baseQty,
         remaining_warehouse_stock: Number(item.total_stock),

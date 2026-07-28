@@ -25,6 +25,10 @@ const productRepository = new BaseRepository(db.Product);
 const siteDispatchLogRepository = new SiteDispatchLogRepository(
   db.SiteDispatchLog,
 );
+// Site Material Return audit table (inventory_site_material_returns) — har
+// /ledger/return isme bhi ek row likhta hai, warna return report khali rehti.
+const siteMaterialReturnRepository = new BaseRepository(db.SiteMaterialReturn);
+const warehouseRepository = new BaseRepository(db.Warehouse);
 // Live per-site stock balances (lock-aware find/create + visibility queries)
 const siteStockRepository = new SiteStockRepository(db.SiteStockLevel);
 // Site master data — inventory side + HRM geofence side (cross-module on
@@ -40,6 +44,9 @@ const dispatchService = new DispatchService({
   productRepository,
   siteDispatchLogRepository,
   siteStockRepository,
+  // Return audit table + warehouse resolution — returnItem inme row likhta hai.
+  siteMaterialReturnRepository,
+  warehouseRepository,
   // Dual-id resolution (inventory Site pk ya HRM ProjectSite id) ke liye —
   // _resolveInventorySite in dono par depend karta hai.
   siteRepository,

@@ -82,8 +82,16 @@ class DispatchController {
   // POST /ledger/return
   returnItem = async (req, res, next) => {
     try {
-      const { site_id, item_id, quantity, uom, remarks, transaction_date } =
-        req.body;
+      const {
+        site_id,
+        item_id,
+        quantity,
+        uom,
+        remarks,
+        transaction_date,
+        warehouse_id,
+        condition,
+      } = req.body;
 
       // Quick HTTP-level validation
       if (!site_id || !item_id || quantity === undefined || !uom) {
@@ -101,6 +109,10 @@ class DispatchController {
         remarks,
         transactionDate: transaction_date,
         userId: req.user?.id || null,
+        // Site Material Return audit row ke liye — kis warehouse me wapas
+        // aaya aur kis haalat me ('Good' | 'Damaged' | 'Scrap').
+        warehouseId: warehouse_id || req.body.WarehouseId || null,
+        condition,
       });
 
       return res.status(201).json({
