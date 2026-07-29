@@ -7,6 +7,7 @@ const prodCtrl = require("../inventory_controller/product.controller");
 const whCtrl = require("../inventory_controller/warehouse.controller");
 const partnerCtrl = require("../inventory_controller/Partner");
 const siteReturnCtrl = require("../inventory_controller/siteReturn.controller");
+const reconcileCtrl = require("../inventory_controller/reconcile.controller");
 
 // Middleware Import
 const {
@@ -65,6 +66,16 @@ router.put(
   asyncHandler(invCtrl.updateStockMovement),
 );
 
+// Reverse-accounting delete: OUTWARD delete stock wapas jodta hai,
+// INWARD/RETURN delete stock ghatata hai (negative hone par 400 + rollback).
+// Row soft-delete hoti hai (deletedAt) — audit trail preserved.
+router.delete(
+  "/movement/:id",
+  verifyToken,
+  canManageInventory,
+  asyncHandler(invCtrl.deleteStockMovement),
+);
+
 router.post(
   "/bulkmovement",
   verifyToken,
@@ -91,6 +102,11 @@ router.get(
   asyncHandler(invCtrl.getAvailableStock),
 );
 
+// Alias: GET /stock — same product-wise balances, `display_stock` dual-UOM
+// string ke saath ("4 Bundle & 45 mtr (445 mtr Total)") frontend rendering
+// ke liye.
+router.get("/stock", verifyToken, asyncHandler(invCtrl.getAvailableStock));
+
 // ==========================================
 // 1b. SITE MATERIAL RETURN (Protected)
 // ==========================================
@@ -102,6 +118,18 @@ router.post(
   canManageInventory,
   validate(siteReturnSchema, { withSuccess: true }),
   asyncHandler(siteReturnCtrl.returnMaterialFromSite),
+);
+
+// ==========================================
+// 1c. STOCK RECONCILIATION ("1-click reset")
+// ==========================================
+// StockLevel ko inventory_transactions ledger se recompute karke reset karta
+// hai. Destructive hai — sirf ADMIN. Pehle ?dryRun=true se report dekhein.
+router.post(
+  "/reconcile-stock",
+  verifyToken,
+  authorizeRoles("ADMIN"),
+  asyncHandler(reconcileCtrl.runStockReconciliation),
 );
 
 // ==========================================

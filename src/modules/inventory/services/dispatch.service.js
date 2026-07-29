@@ -1,4 +1,7 @@
 const AppError = require("../../../common/AppError");
+// Shared UOM utils — conversion/rounding ka single source of truth ab
+// uom.service.js me hai (movement/site-return/delete flows bhi use karte hain).
+const uomService = require("./uom.service");
 
 /**
  * Site Dispatch ledger & stock management — business logic + transaction ownership.
@@ -81,13 +84,10 @@ class DispatchService {
 
   /**
    * Canonical 3-dp rounding — the ONE precision used everywhere.
-   * Every stock column is DECIMAL(15,3), so all in-memory math must collapse
-   * to the same 3 dp grid before compare/store. Without this, binary-float
-   * drift (0.1 + 0.2 !== 0.3) slowly desyncs the in-memory counters from the
-   * DB and can reject a legitimate "return everything" by a 1e-14 hair.
+   * Delegates to the shared uom.service (details wahi dekho).
    */
   _round3(n) {
-    return Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
+    return uomService.round3(n);
   }
 
   _assertValidInput(siteId, itemId, qty, uom) {
@@ -118,69 +118,26 @@ class DispatchService {
     };
   }
 
-  // Case-insensitive UOM compare (trims stray whitespace from the payload).
+  // Case-insensitive UOM compare — delegates to shared uom.service.
   _uomMatches(a, b) {
-    return (
-      typeof a === "string" &&
-      typeof b === "string" &&
-      a.trim().toLowerCase() === b.trim().toLowerCase()
-    );
+    return uomService.uomMatches(a, b);
   }
 
   /**
    * Universal UOM normalisation — the single funnel through which EVERY
    * movement (DISPATCH and RETURN alike) passes before any validation or
-   * stock math. Returns are deliberately symmetric with dispatches: material
-   * issued as "2 Bundle" can come back as "100 Meter", "1.5 Bundle", or
-   * "37.25 Meter" and all of it lands on the same base-UOM number line.
+   * stock math. Poori logic ab shared uom.service.toBaseQuantity me hai
+   * (wahi /movement, /site-return, DELETE flows bhi use karte hain) —
+   * yahan sirf delegation hai, behaviour bilkul same:
    *
    *   uom === base_uom       -> base_quantity = quantity            (no factor!)
    *   uom === purchase_uom   -> base_quantity = quantity * conversion_factor
    *   anything else          -> reject (unknown unit for this item)
    *
-   * Example (Rope: base 'Meter', purchase 'Bundle', factor 50):
-   *   ('120', 'Meter')  -> 120     — raw meters pass through untouched
-   *   (2,     'Bundle') -> 100     — 2 * 50
-   *   (1.5,   'bundle') -> 75      — case-insensitive, fractional bundles OK
-   *
-   * Both branches round to the canonical 3-dp grid (DECIMAL(15,3)) so the
-   * number we validate against, mutate stock with, and store in the ledger
-   * is byte-for-byte the same one the DB holds.
+   * Rounds to the canonical 3-dp grid; rejects results < 0.001.
    */
   _toBaseQuantity(item, quantity, uom) {
-    let baseQty;
-    if (this._uomMatches(uom, item.base_uom)) {
-      // Already in base units — use the raw quantity directly. Multiplying
-      // here would double-convert a "120 Meter" return into 6000 Meters.
-      baseQty = this._round3(quantity);
-    } else if (item.purchase_uom && this._uomMatches(uom, item.purchase_uom)) {
-      const factor = Number(item.conversion_factor);
-      if (!Number.isFinite(factor) || factor <= 0) {
-        throw new AppError(
-          `Item '${item.name}' has an invalid conversion_factor; cannot convert '${uom}'.`,
-          400,
-        );
-      }
-      baseQty = this._round3(Number(quantity) * factor);
-    } else {
-      throw new AppError(
-        `Invalid uom '${uom}' for item '${item.name}'. Allowed: ` +
-          `'${item.base_uom}'${item.purchase_uom ? ` or '${item.purchase_uom}'` : ""}.`,
-        400,
-      );
-    }
-
-    // A movement that rounds to zero (e.g. 0.0004 Bundle) can neither be
-    // stored (ledger validates min 0.001) nor affect stock — reject it here
-    // with a clean message instead of a low-level Sequelize validation error.
-    if (baseQty < 0.001) {
-      throw new AppError(
-        `Quantity is too small: ${quantity} ${uom} converts to less than ` +
-          `0.001 ${item.base_uom}.`,
-        400,
-      );
-    }
-    return baseQty;
+    return uomService.toBaseQuantity(item, quantity, uom).baseQty;
   }
 
   /**

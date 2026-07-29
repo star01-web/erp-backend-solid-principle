@@ -1,5 +1,9 @@
 const db = require("../../../common/index.db");
 const { Op } = require("sequelize");
+// Dual-UOM funnel — SAME conversion the dispatch ledger uses. quantity+uom
+// (e.g. "2 Bundle") -> base_quantity (200 mtr); all stock math on base.
+const uomService = require("../services/uom.service");
+const { round3 } = uomService;
 
 // 1. PRODUCT MANAGEMENT (Master Data)
 
@@ -290,6 +294,7 @@ const processStockMovement = async (req, res) => {
       manufacturer_id,
       color,
       quantity,
+      uom, // OPTIONAL: entered unit — base_uom ya purchase_uom (missing => base)
       unit_price,
       type,
       batch_number,
@@ -331,6 +336,27 @@ const processStockMovement = async (req, res) => {
 
     const moveType = type.toUpperCase();
     const absQty = Math.abs(moveQty);
+
+    // --- DUAL-UOM CONVERSION (single funnel, same as dispatch ledger) ---
+    // Entered quantity+uom -> base quantity. "2 Bundle" (factor 100) becomes
+    // 200 mtr; "120 mtr" stays 120; missing uom => base UOM (factor 1,
+    // backward compatible). SAARA stock math neeche base UOM me hota hai —
+    // StockLevel.current_quantity strictly base UOM ka counter hai.
+    let uomInfo;
+    try {
+      uomInfo = uomService.toBaseQuantity(product, absQty, uom);
+    } catch (uomError) {
+      await t.rollback();
+      return res.status(uomError.statusCode || 400).json({
+        success: false,
+        message: uomError.message,
+      });
+    }
+    const baseQty = uomInfo.baseQty; // positive magnitude, base UOM
+    // ADJUSTMENT apna sign rakhta hai (signed delta), baaki types ka sign
+    // `type` se aata hai.
+    const signedBaseQty = moveQty < 0 ? -baseQty : baseQty;
+
     const isDeduction = ["OUTWARD", "SCRAP", "DISPATCH"].includes(moveType);
     const isAddition = ["INWARD", "RETURN"].includes(moveType);
 
@@ -361,35 +387,38 @@ const processStockMovement = async (req, res) => {
         lock: t.LOCK.UPDATE, // SELECT … FOR UPDATE: no concurrent oversell
       });
 
-      const totalAvailable = stockRows.reduce(
-        (sum, r) => sum + Number(r.current_quantity),
-        0,
+      const totalAvailable = round3(
+        stockRows.reduce((sum, r) => sum + Number(r.current_quantity), 0),
       );
 
       // Guard against negative stock — with the REAL available number so the
       // caller can see the stock exists (just under a different variant).
-      if (totalAvailable < absQty) {
+      // Comparison BASE UOM me hoti hai (entered "2 Bundle" => 200 base units
+      // chahiye).
+      if (totalAvailable < baseQty) {
         await t.rollback();
         return res.status(400).json({
           success: false,
-          message: `Insufficient stock. Available: ${totalAvailable}, Requested: ${absQty}.`,
+          message:
+            `Insufficient stock. Available: ${totalAvailable} ${product.base_uom || product.unit || ""}`.trim() +
+            `, Requested: ${absQty} ${uomInfo.uom} (= ${baseQty} ${product.base_uom || product.unit || "base units"}).`,
         });
       }
 
       // Greedy deduction across the matched buckets (largest first), so a
       // quantity split over several manufacturer/color rows can still be filled.
-      let remaining = absQty;
+      let remaining = baseQty;
       for (const row of stockRows) {
         if (remaining <= 0) break;
         const take = Math.min(Number(row.current_quantity), remaining);
         await row.update(
           {
-            current_quantity: Number(row.current_quantity) - take,
+            current_quantity: round3(Number(row.current_quantity) - take),
             last_updated_at: new Date(),
           },
           { transaction: t },
         );
-        remaining -= take;
+        remaining = round3(remaining - take);
       }
 
       // Reflect a real source bucket on the transaction log.
@@ -410,9 +439,12 @@ const processStockMovement = async (req, res) => {
       });
 
       const currentQty = Number(stockRecord.current_quantity);
-      // INWARD/RETURN add the absolute qty; ADJUSTMENT applies the signed delta.
-      const newQuantity =
-        moveType === "ADJUSTMENT" ? currentQty + moveQty : currentQty + absQty;
+      // INWARD/RETURN add the (base) qty; ADJUSTMENT applies the signed base delta.
+      const newQuantity = round3(
+        moveType === "ADJUSTMENT"
+          ? currentQty + signedBaseQty
+          : currentQty + baseQty,
+      );
 
       if (newQuantity < 0) {
         await t.rollback();
@@ -443,6 +475,13 @@ const processStockMovement = async (req, res) => {
         color: logColor,
         type: moveType,
         quantity: moveQty,
+        // Dual-UOM audit trio: entered unit (normalized spelling), factor
+        // frozen at transaction time, and the base amount stock math used.
+        // ADJUSTMENT ka base signed save hota hai (wahi uska matlab hai).
+        uom: uomInfo.uom,
+        conversion_factor: uomInfo.factor,
+        base_quantity:
+          moveType === "ADJUSTMENT" ? signedBaseQty : baseQty,
         unit_price: unit_price || 0,
         batch_number,
         reference_no,
@@ -473,16 +512,16 @@ const processStockMovement = async (req, res) => {
           .json({ success: false, message: "Site not found." });
       }
 
-      // 1) Site dispatch ledger entry (quantity product ke base UOM me hai —
-      // /movement route par UOM conversion nahi hota, isliye entered ==base).
+      // 1) Site dispatch ledger entry — entered qty/uom verbatim, plus the
+      // converted base_quantity (site stock math is strictly base UOM).
       siteDispatchLog = await db.SiteDispatchLog.create(
         {
           site_id: site.id,
           item_id: productId,
           transaction_type: "DISPATCH",
           quantity: absQty,
-          uom: product.base_uom || product.unit || "pcs",
-          base_quantity: absQty,
+          uom: uomInfo.uom,
+          base_quantity: baseQty,
           transaction_date: movement_date || date || new Date(),
           remarks: remarks || null,
           created_by: userId,
@@ -499,13 +538,13 @@ const processStockMovement = async (req, res) => {
       };
       const [siteStock, created] = await db.SiteStockLevel.findOrCreate({
         where: siteStockWhere,
-        defaults: { inHandQty: absQty },
+        defaults: { inHandQty: baseQty },
         transaction: t,
         lock: t.LOCK.UPDATE,
       });
       if (!created) {
         await siteStock.update(
-          { inHandQty: Number(siteStock.inHandQty) + absQty },
+          { inHandQty: round3(Number(siteStock.inHandQty) + baseQty) },
           { transaction: t },
         );
       }
@@ -565,27 +604,44 @@ const updateStockMovement = async (req, res) => {
 
     let currentQty = Number(stockRecord.current_quantity);
 
-    if (["INWARD", "RETURN", "ADJUSTMENT"].includes(oldTx.type)) {
-      currentQty -= Number(oldTx.quantity);
+    // --- STEP 1: Undo the OLD row's effect, in BASE UOM. Legacy rows (no
+    // base_quantity) were single-UOM era: quantity WAS base. ADJUSTMENT ka
+    // base signed store hota hai, isliye woh as-is reverse hota hai.
+    const oldBase =
+      oldTx.base_quantity !== null && oldTx.base_quantity !== undefined
+        ? Number(oldTx.base_quantity)
+        : Number(oldTx.quantity);
+
+    if (oldTx.type === "ADJUSTMENT") {
+      currentQty = round3(currentQty - oldBase);
+    } else if (["INWARD", "RETURN"].includes(oldTx.type)) {
+      currentQty = round3(currentQty - Math.abs(oldBase));
     } else {
-      currentQty += Number(oldTx.quantity);
+      currentQty = round3(currentQty + Math.abs(oldBase));
     }
 
+    // --- STEP 2: Apply the NEW values. New qty is interpreted in the SAME
+    // uom as the original row (frozen factor) — the endpoint doesn't accept a
+    // uom change, so entered * frozen-factor keeps the ledger consistent.
     const finalType = (newType || oldTx.type).toUpperCase();
     const finalQty =
       newQty !== undefined ? Number(newQty) : Number(oldTx.quantity);
-    const absFinalQty = Math.abs(finalQty);
+    const oldFactor = Number(oldTx.conversion_factor) || 1;
+    const finalBase = round3(finalQty * oldFactor);
+    const absFinalBase = Math.abs(finalBase);
 
-    if (["INWARD", "RETURN", "ADJUSTMENT"].includes(finalType)) {
-      currentQty += finalQty;
+    if (["INWARD", "RETURN"].includes(finalType)) {
+      currentQty = round3(currentQty + absFinalBase);
+    } else if (finalType === "ADJUSTMENT") {
+      currentQty = round3(currentQty + finalBase);
     } else {
-      if (currentQty < absFinalQty) {
+      if (currentQty < absFinalBase) {
         await t.rollback();
         return res
           .status(400)
           .json({ success: false, message: "Insufficient stock for update." });
       }
-      currentQty -= absFinalQty;
+      currentQty = round3(currentQty - absFinalBase);
     }
 
     if (currentQty < 0) {
@@ -598,6 +654,7 @@ const updateStockMovement = async (req, res) => {
     await oldTx.update(
       {
         quantity: finalQty,
+        base_quantity: finalType === "ADJUSTMENT" ? finalBase : absFinalBase,
         type: finalType,
         remarks: remarks || oldTx.remarks,
         vehicle_number:
@@ -625,6 +682,170 @@ const updateStockMovement = async (req, res) => {
   }
 };
 
+/**
+ * DELETE /movement/:id — transaction delete with automatic REVERSE ACCOUNTING.
+ *
+ * Rule (sab kuch BASE UOM me, `COALESCE(base_quantity, quantity)` se):
+ *   - OUTWARD / SCRAP / DISPATCH delete  -> base qty StockLevel me WAPAS ADD
+ *   - INWARD / RETURN delete             -> base qty StockLevel se MINUS
+ *     (agar minus se available < 0 hota ho -> 400, kuch bhi delete nahi hota)
+ *   - ADJUSTMENT delete                  -> signed base delta reverse hota hai
+ *
+ * Row soft-delete hoti hai (paranoid: true -> deletedAt stamp), isliye audit
+ * trail hamesha preserved hai aur reconcile ka `deletedAt IS NULL` filter ise
+ * ledger math se bahar kar deta hai. Saara kaam EK sequelize.transaction me,
+ * row-level UPDATE locks ke saath — koi bhi step fail ho toh poora rollback.
+ */
+const deleteStockMovement = async (req, res) => {
+  const { id } = req.params;
+  const t = await db.sequelize.transaction();
+
+  try {
+    const tx = await db.StockTransaction.findByPk(id, {
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (!tx) {
+      await t.rollback();
+      return res
+        .status(404)
+        .json({ success: false, message: "Transaction not found." });
+    }
+
+    const product = await db.Product.findByPk(tx.ProductId, {
+      transaction: t,
+      paranoid: false, // deleted product ki row bhi reverse ho sakti hai
+    });
+    const baseUom = product?.base_uom || product?.unit || "base units";
+
+    // Base amount this row moved. Legacy rows (base_quantity NULL) single-UOM
+    // era ki hain — quantity hi base tha (kuch OUTWARD negative sign ke saath).
+    const rawBase =
+      tx.base_quantity !== null && tx.base_quantity !== undefined
+        ? Number(tx.base_quantity)
+        : Number(tx.quantity);
+
+    // Reverse delta on StockLevel:
+    //   deduction types ne stock GHATAYA tha -> delete par ADD (+abs)
+    //   addition types ne stock BADHAYA tha  -> delete par MINUS (-abs)
+    //   ADJUSTMENT signed tha               -> delete par -signed
+    const isDeduction = ["OUTWARD", "SCRAP", "DISPATCH"].includes(tx.type);
+    const reverseDelta =
+      tx.type === "ADJUSTMENT"
+        ? -rawBase
+        : isDeduction
+          ? Math.abs(rawBase)
+          : -Math.abs(rawBase);
+
+    // Variant buckets of this (product, warehouse, manufacturer) — same
+    // matching rule the create-side uses. Row-lock so parallel movements
+    // can't race the reversal.
+    const variantWhere = {
+      ProductId: tx.ProductId,
+      WarehouseId: tx.WarehouseId,
+    };
+    if (tx.manufacturer_id) variantWhere.manufacturer_id = tx.manufacturer_id;
+
+    const stockRows = await db.StockLevel.findAll({
+      where: variantWhere,
+      order: [["current_quantity", "DESC"]],
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+
+    if (reverseDelta >= 0) {
+      // ADD back (deleting an OUTWARD/SCRAP/DISPATCH or negative ADJUSTMENT).
+      if (stockRows.length > 0) {
+        const target = stockRows[0]; // largest bucket
+        await target.update(
+          {
+            current_quantity: round3(
+              Number(target.current_quantity) + reverseDelta,
+            ),
+            last_updated_at: new Date(),
+          },
+          { transaction: t },
+        );
+      } else {
+        // Bucket hi nahi bacha — recreate so the stock isn't lost.
+        await db.StockLevel.create(
+          {
+            ProductId: tx.ProductId,
+            WarehouseId: tx.WarehouseId,
+            manufacturer_id: tx.manufacturer_id || null,
+            color: "Standard",
+            current_quantity: reverseDelta,
+            last_updated_at: new Date(),
+          },
+          { transaction: t },
+        );
+      }
+    } else {
+      // SUBTRACT (deleting an INWARD/RETURN or positive ADJUSTMENT) — strict
+      // negative-stock guard FIRST, then greedy drain (fullest bucket first).
+      const needed = Math.abs(reverseDelta);
+      const totalAvailable = round3(
+        stockRows.reduce((sum, r) => sum + Number(r.current_quantity), 0),
+      );
+
+      if (totalAvailable < needed) {
+        await t.rollback();
+        return res.status(400).json({
+          success: false,
+          message:
+            `Cannot delete this ${tx.type} transaction: reversing it would drive stock negative. ` +
+            `Available: ${totalAvailable} ${baseUom}, needs to remove: ${needed} ${baseUom}. ` +
+            `Stock pehle hi consume/outward ho chuka hai — pehle un movements ko handle karein.`,
+        });
+      }
+
+      let remaining = needed;
+      for (const row of stockRows) {
+        if (remaining <= 0) break;
+        const take = Math.min(Number(row.current_quantity), remaining);
+        if (take <= 0) continue;
+        await row.update(
+          {
+            current_quantity: round3(Number(row.current_quantity) - take),
+            last_updated_at: new Date(),
+          },
+          { transaction: t },
+        );
+        remaining = round3(remaining - take);
+      }
+    }
+
+    // Soft delete — paranoid model sirf deletedAt stamp karta hai; row audit
+    // ke liye table me hi rehti hai aur reconcile use ignore karta hai.
+    await tx.destroy({ transaction: t });
+
+    await t.commit();
+
+    // Heads-up: /movement ke site-synced OUTWARDs ne SiteDispatchLog +
+    // SiteStockLevel bhi likha tha; un tables me StockTransaction ka back-link
+    // nahi hai, isliye site-side reversal manually (ya site-return se) hota hai.
+    const siteSyncWarning =
+      isDeduction && tx.type !== "SCRAP"
+        ? "Note: agar ye movement kisi site ko sync hua tha, toh site-side stock (SiteStockLevel) alag se adjust karna hoga."
+        : undefined;
+
+    return res.status(200).json({
+      success: true,
+      message: `Transaction deleted. Stock reverse-adjusted by ${reverseDelta > 0 ? "+" : ""}${reverseDelta} ${baseUom}.`,
+      data: {
+        deleted_transaction_id: tx.id,
+        type: tx.type,
+        reversed_base_quantity: reverseDelta,
+        base_uom: baseUom,
+        ...(siteSyncWarning ? { warning: siteSyncWarning } : {}),
+      },
+    });
+  } catch (error) {
+    await t.rollback();
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 const bulkProcessStockMovement = async (req, res) => {
   const t = await db.sequelize.transaction();
   try {
@@ -644,6 +865,7 @@ const bulkProcessStockMovement = async (req, res) => {
         productId,
         warehouseId,
         quantity,
+        uom, // OPTIONAL: entered unit — base_uom ya purchase_uom (missing => base)
         type,
         batch_number,
         reference_no,
@@ -664,6 +886,18 @@ const bulkProcessStockMovement = async (req, res) => {
       const movementType = type.toUpperCase();
       const moveQty = Number(quantity);
       const absQty = Math.abs(moveQty);
+
+      // --- DUAL-UOM CONVERSION (same funnel as single /movement) ---
+      // Product row chahiye conversion ke liye; missing/invalid uom par
+      // toBaseQuantity khud descriptive error throw karta hai (poora bulk
+      // rollback hota hai — all-or-nothing).
+      const product = await db.Product.findByPk(productId, { transaction: t });
+      if (!product) {
+        throw new Error(`Product not found: ${productId}`);
+      }
+      const uomInfo = uomService.toBaseQuantity(product, absQty, uom);
+      const baseQty = uomInfo.baseQty;
+      const signedBaseQty = moveQty < 0 ? -baseQty : baseQty;
 
       // --- SMART WHERE CLAUSE BUILDER ---
       // Agar UI se color/manufacturer aayega tabhi match karega, warna sirf Product aur Warehouse dekhega
@@ -696,17 +930,28 @@ const bulkProcessStockMovement = async (req, res) => {
 
         let currentQty = Number(stockRecord.current_quantity || 0);
 
-        if (currentQty < absQty) {
-          throw new Error(`Insufficient stock! Available: ${currentQty}, Requested: ${absQty} (Product ID: ${productId})`);
+        // Comparison/deduction BASE UOM me — "2 Bundle" => 200 base units.
+        if (currentQty < baseQty) {
+          throw new Error(
+            `Insufficient stock! Available: ${currentQty} ${product.base_uom || ""}`.trim() +
+              `, Requested: ${absQty} ${uomInfo.uom} (= ${baseQty}) (Product ID: ${productId})`,
+          );
         }
 
-        currentQty -= absQty;
+        currentQty = round3(currentQty - baseQty);
         await stockRecord.update({ current_quantity: currentQty }, { transaction: t });
-      } 
-      
+      }
+
       // --- LOGIC FOR INWARD / RETURN ---
       else {
+        // ADJUSTMENT signed base delta apply karta hai; INWARD/RETURN positive add.
+        const delta = movementType === "ADJUSTMENT" ? signedBaseQty : baseQty;
         if (!stockRecord) {
+          if (delta < 0) {
+            throw new Error(
+              `Adjustment leads to negative stock (no existing stock) for Product ID: ${productId}`,
+            );
+          }
           // Inward hai aur record nahi hai, tab nayi row create karna banta hai
           stockRecord = await db.StockLevel.create(
             {
@@ -714,13 +959,19 @@ const bulkProcessStockMovement = async (req, res) => {
               WarehouseId: warehouseId,
               manufacturer_id: manufacturer_id || null,
               color: color || "Standard",
-              current_quantity: absQty,
+              current_quantity: delta,
             },
             { transaction: t }
           );
         } else {
-          let currentQty = Number(stockRecord.current_quantity || 0);
-          currentQty += absQty;
+          const currentQty = round3(
+            Number(stockRecord.current_quantity || 0) + delta,
+          );
+          if (currentQty < 0) {
+            throw new Error(
+              `Adjustment leads to negative stock for Product ID: ${productId}`,
+            );
+          }
           await stockRecord.update({ current_quantity: currentQty }, { transaction: t });
         }
       }
@@ -736,20 +987,16 @@ const bulkProcessStockMovement = async (req, res) => {
           throw new Error(`Site not found for site_id: ${site_id}`);
         }
 
-        const product = await db.Product.findByPk(productId, {
-          transaction: t,
-        });
-
-        // 1) Immutable DISPATCH ledger row (quantity base UOM me maani jaati
-        // hai — bulk route par UOM conversion nahi hota).
+        // 1) Immutable DISPATCH ledger row — entered qty/uom verbatim plus
+        // converted base_quantity (site stock math strictly base UOM me hai).
         await db.SiteDispatchLog.create(
           {
             site_id: site.id,
             item_id: productId,
             transaction_type: "DISPATCH",
             quantity: absQty,
-            uom: product?.base_uom || product?.unit || "pcs",
-            base_quantity: absQty,
+            uom: uomInfo.uom,
+            base_quantity: baseQty,
             transaction_date: movement_date || date || new Date(),
             remarks: remarks || null,
             created_by: req.user.id,
@@ -767,13 +1014,13 @@ const bulkProcessStockMovement = async (req, res) => {
         };
         const [siteStock, created] = await db.SiteStockLevel.findOrCreate({
           where: siteStockWhere,
-          defaults: { inHandQty: absQty },
+          defaults: { inHandQty: baseQty },
           transaction: t,
           lock: t.LOCK.UPDATE,
         });
         if (!created) {
           await siteStock.update(
-            { inHandQty: Number(siteStock.inHandQty) + absQty },
+            { inHandQty: round3(Number(siteStock.inHandQty) + baseQty) },
             { transaction: t },
           );
         }
@@ -788,6 +1035,11 @@ const bulkProcessStockMovement = async (req, res) => {
         color: color || "Standard",
         type: movementType,
         quantity: moveQty,
+        // Dual-UOM audit trio (see processStockMovement).
+        uom: uomInfo.uom,
+        conversion_factor: uomInfo.factor,
+        base_quantity:
+          movementType === "ADJUSTMENT" ? signedBaseQty : baseQty,
         unit_price: unit_price || 0,
         batch_number: batch_number || null,
         reference_no: reference_no || null,
@@ -820,7 +1072,15 @@ const getInventoryDashboard = async (req, res) => {
       include: [
         {
           model: db.Product,
-          attributes: ["name", "sku_code", "unit", "min_stock_level"],
+          attributes: [
+            "name",
+            "sku_code",
+            "unit",
+            "min_stock_level",
+            "base_uom",
+            "purchase_uom",
+            "conversion_factor",
+          ],
         },
         { model: db.Warehouse, attributes: ["name"] },
       ],
@@ -831,9 +1091,19 @@ const getInventoryDashboard = async (req, res) => {
         Number(s.current_quantity) <= Number(s.Product?.min_stock_level || 0),
     );
 
+    // Dual-UOM display per bucket: "4 Bundle & 45 mtr (445 mtr Total)".
+    const data = stockStatus.map((s) => {
+      const row = s.toJSON();
+      row.display_stock = uomService.formatDualStock(
+        Number(s.current_quantity),
+        s.Product,
+      );
+      return row;
+    });
+
     return res.status(200).json({
       success: true,
-      data: stockStatus,
+      data,
       alerts: lowStock,
     });
   } catch (error) {
@@ -865,7 +1135,15 @@ const getAvailableStock = async (req, res) => {
       include: [
         {
           model: db.Product,
-          attributes: ["name", "sku_code", "unit", "min_stock_level"],
+          attributes: [
+            "name",
+            "sku_code",
+            "unit",
+            "min_stock_level",
+            "base_uom",
+            "purchase_uom",
+            "conversion_factor",
+          ],
         },
       ],
       group: ["ProductId", "Product.id"],
@@ -882,9 +1160,14 @@ const getAvailableStock = async (req, res) => {
           name: r.Product?.name,
           sku_code: r.Product?.sku_code,
           unit: r.Product?.unit,
+          base_uom: r.Product?.base_uom,
+          purchase_uom: r.Product?.purchase_uom,
+          conversion_factor: Number(r.Product?.conversion_factor) || 1,
           total_quantity: total,
           reserved_quantity: reserved,
           available_quantity: total - reserved,
+          // UI-ready dual-UOM string: "4 Bundle & 45 mtr (445 mtr Total)".
+          display_stock: uomService.formatDualStock(total, r.Product),
           min_stock_level: minLevel,
           is_low_stock: total <= minLevel,
         };
@@ -966,6 +1249,7 @@ module.exports = {
   // Stock Movement
   processStockMovement,
   updateStockMovement,
+  deleteStockMovement,
   bulkProcessStockMovement,
 
   // Reports

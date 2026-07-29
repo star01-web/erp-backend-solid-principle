@@ -16,6 +16,8 @@ const StockTransaction = sequelize.define(
         "RETURN",
         "DAMAGE",
         "ADJUSTMENT",
+        "SCRAP",
+        "DISPATCH",
       ),
       allowNull: false,
     },
@@ -51,9 +53,32 @@ const StockTransaction = sequelize.define(
     },
 
     // --- Quantity & Value ---
+    // Dual-UOM rule: `quantity` is what the operator TYPED in `uom` (e.g. "2
+    // Bundle"); `base_quantity` is that amount converted to the product's
+    // base UOM (2 * 100 = 200 mtr) and is the ONLY figure stock math and
+    // reconciliation use. `conversion_factor` is FROZEN at transaction time so
+    // a later change on the Product never rewrites history.
+    // (Columns added by scripts/migrate-dual-uom-transactions.js.)
     quantity: {
       type: DataTypes.DECIMAL(15, 3),
       allowNull: false,
+    },
+    uom: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      comment: "Unit selected at entry time (base_uom or purchase_uom)",
+    },
+    conversion_factor: {
+      type: DataTypes.DECIMAL(15, 4),
+      allowNull: false,
+      defaultValue: 1,
+      comment: "Base units per entered unit, frozen at transaction time",
+    },
+    base_quantity: {
+      type: DataTypes.DECIMAL(15, 3),
+      allowNull: true, // legacy rows backfilled by migration; new rows always set
+      comment:
+        "quantity converted to base UOM (qty * factor) — all stock math uses this",
     },
     unit_price: {
       type: DataTypes.DECIMAL(15, 2),
@@ -100,6 +125,12 @@ const StockTransaction = sequelize.define(
     timestamps: true,
     createdAt: "createdAt",
     updatedAt: false,
+    // Soft-delete for audit trails: DELETE /movement/:id reverse-accounts the
+    // stock and then destroy()s the row, which only stamps deletedAt. The DB
+    // column is camelCase (added by the migration), and `underscored: true`
+    // would otherwise map it to deleted_at — so pin the exact name.
+    paranoid: true,
+    deletedAt: "deletedAt",
     underscored: true, // Use snake_case for column names
 
     validate: {

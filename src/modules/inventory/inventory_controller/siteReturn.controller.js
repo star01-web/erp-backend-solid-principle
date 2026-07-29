@@ -140,6 +140,10 @@ const returnMaterialFromSite = async (req, res) => {
     // type 'RETURN' (not 'INWARD'): StockTransaction ka partnerRequired
     // validator INWARD ke liye partner_id mandatory karta hai, aur site
     // koi Partner nahi hai. reference_no se SiteMaterialReturn link hota hai.
+    // Dual-UOM: site returns hamesha LOOSE base units me aate hain (e.g. 45
+    // mtr), isliye factor 1 aur base_quantity = qty — koi conversion
+    // discrepancy possible hi nahi.
+    const productRow = await db.Product.findByPk(ProductId, { transaction: t });
     await db.StockTransaction.create(
       {
         date: materialReturn.returnDate,
@@ -149,6 +153,9 @@ const returnMaterialFromSite = async (req, res) => {
         color: logColor,
         type: "RETURN",
         quantity: qty,
+        uom: productRow?.base_uom || productRow?.unit || "pcs",
+        conversion_factor: 1,
+        base_quantity: qty,
         reference_no: "SITE_RETURN-" + materialReturn.id,
         remarks: remarks || null,
         created_by: userId,
@@ -158,7 +165,6 @@ const returnMaterialFromSite = async (req, res) => {
 
     // --- STEP 3b: Site dispatch ledger me bhi RETURN row — taaki site ki net
     // consumption report (DISPATCH - RETURN) is return ko bhi gine. ---
-    const productRow = await db.Product.findByPk(ProductId, { transaction: t });
     await db.SiteDispatchLog.create(
       {
         site_id: inventorySiteId,
