@@ -114,6 +114,16 @@ const StockTransaction = sequelize.define(
       allowNull: false,
       field: "createdAt",
     },
+    // Soft-delete stamp. MUST be declared explicitly with a pinned `field`:
+    // the model is `underscored: true`, and the top-level `deletedAt` option
+    // only renames the ATTRIBUTE — underscored still maps it to a
+    // `deleted_at` COLUMN, which doesn't exist (DB column is camelCase,
+    // added by migrate-dual-uom-transactions.js).
+    deletedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "deletedAt",
+    },
     // Note: Ise tabhi uncomment karna jab database me 'updated_by' column add kar lo
     // updated_by: {
     //   type: DataTypes.UUID,
@@ -127,10 +137,9 @@ const StockTransaction = sequelize.define(
     updatedAt: false,
     // Soft-delete for audit trails: DELETE /movement/:id reverse-accounts the
     // stock and then destroy()s the row, which only stamps deletedAt. The DB
-    // column is camelCase (added by the migration), and `underscored: true`
-    // would otherwise map it to deleted_at — so pin the exact name.
+    // column is camelCase — the attribute above pins `field: "deletedAt"`
+    // (because `underscored: true` would otherwise look for deleted_at).
     paranoid: true,
-    deletedAt: "deletedAt",
     underscored: true, // Use snake_case for column names
 
     validate: {
