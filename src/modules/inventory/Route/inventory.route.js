@@ -131,6 +131,12 @@ router.post(
   authorizeRoles("ADMIN"),
   asyncHandler(reconcileCtrl.runStockReconciliation),
 );
+router.post(
+  "/sync-stock",
+  verifyToken,
+  authorizeRoles("ADMIN"),
+  asyncHandler(reconcileCtrl.runStockReconciliation),
+);
 
 // ==========================================
 // 2. PRODUCT MANAGEMENT
