@@ -1120,17 +1120,20 @@ const getAvailableStock = async (req, res) => {
     // includeZero=true dene par jinke total 0 hai woh bhi aayenge; default only >0.
     const includeZero = req.query.includeZero === "true";
 
+    // Fetch all StockLevel rows WITH related Product, Warehouse, and
+    // Manufacturer (Partner via manufacturer_id). We aggregate per Product in
+    // JS so that we can also collect the distinct Warehouse names (godowns)
+    // and Manufacturer names (brands) for each product as comma-separated
+    // lists — the frontend needs these for the Godown and Brand columns.
     const rows = await db.StockLevel.findAll({
       attributes: [
+        "id",
         "ProductId",
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("current_quantity")),
-          "total_quantity",
-        ],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("reserved_quantity")),
-          "total_reserved",
-        ],
+        "WarehouseId",
+        "manufacturer_id",
+        "color",
+        "current_quantity",
+        "reserved_quantity",
       ],
       include: [
         {
@@ -1145,34 +1148,113 @@ const getAvailableStock = async (req, res) => {
             "conversion_factor",
           ],
         },
+        {
+          model: db.Warehouse,
+          attributes: ["name"],
+        },
       ],
-      group: ["ProductId", "Product.id"],
       order: [[db.sequelize.col("Product.name"), "ASC"]],
     });
 
-    const data = rows
-      .map((r) => {
-        const total = Number(r.get("total_quantity")) || 0;
-        const reserved = Number(r.get("total_reserved")) || 0;
-        const minLevel = Number(r.Product?.min_stock_level || 0);
-        return {
-          productId: r.ProductId,
-          name: r.Product?.name,
-          sku_code: r.Product?.sku_code,
-          unit: r.Product?.unit,
-          base_uom: r.Product?.base_uom,
-          purchase_uom: r.Product?.purchase_uom,
+    // --- Build a lookup map: manufacturer_id -> Partner.name ---
+    // Collect all unique non-null manufacturer_ids from the StockLevel rows,
+    // then batch-fetch their names from the Partner table.
+    const mfrIds = [
+      ...new Set(
+        rows
+          .map((r) => r.manufacturer_id)
+          .filter((id) => id != null),
+      ),
+    ];
+    const mfrMap = new Map();
+    if (mfrIds.length > 0) {
+      const partners = await db.Partner.findAll({
+        where: { id: { [Op.in]: mfrIds } },
+        attributes: ["id", "name"],
+      });
+      for (const p of partners) mfrMap.set(p.id, p.name);
+    }
+
+    // --- Aggregate per Product (key = ProductId + name + sku_code) ---
+    const productMap = new Map();
+
+    for (const r of rows) {
+      const pid = r.ProductId;
+      const pName = r.Product?.name || "";
+      const pSku = r.Product?.sku_code || "";
+      const key = `${pid}|${pName}|${pSku}`;
+      if (!productMap.has(key)) {
+        productMap.set(key, {
+          productId: pid,
+          name: r.Product?.name || null,
+          sku_code: r.Product?.sku_code || null,
+          unit: r.Product?.unit || null,
+          base_uom: r.Product?.base_uom || null,
+          purchase_uom: r.Product?.purchase_uom || null,
           conversion_factor: Number(r.Product?.conversion_factor) || 1,
-          total_quantity: total,
-          reserved_quantity: reserved,
-          available_quantity: total - reserved,
-          // UI-ready dual-UOM string: "4 Bundle & 45 mtr (445 mtr Total)".
-          display_stock: uomService.formatDualStock(total, r.Product),
-          min_stock_level: minLevel,
-          is_low_stock: total <= minLevel,
-        };
-      })
-      .filter((p) => includeZero || p.total_quantity > 0);
+          min_stock_level: Number(r.Product?.min_stock_level || 0),
+          _product: r.Product, // keep reference for formatDualStock
+          _total: 0,
+          _reserved: 0,
+          _warehouses: new Set(),
+          _manufacturers: new Set(),
+          _colors: new Set(),
+        });
+      }
+
+      const agg = productMap.get(key);
+      agg._total += Number(r.current_quantity) || 0;
+      agg._reserved += Number(r.reserved_quantity) || 0;
+
+      // Collect distinct warehouse names
+      if (r.Warehouse?.name) agg._warehouses.add(r.Warehouse.name);
+
+      // Collect distinct manufacturer/brand names
+      if (r.manufacturer_id && mfrMap.has(r.manufacturer_id)) {
+        agg._manufacturers.add(mfrMap.get(r.manufacturer_id));
+      }
+
+      // Collect distinct colors
+      if (r.color && r.color !== "Standard") agg._colors.add(r.color);
+    }
+
+    // --- Build final response array ---
+    const data = [];
+    for (const agg of productMap.values()) {
+      const total = round3(agg._total);
+      const reserved = round3(agg._reserved);
+
+      if (!includeZero && total <= 0) continue;
+
+      data.push({
+        productId: agg.productId,
+        name: agg.name,
+        sku_code: agg.sku_code,
+        unit: agg.unit,
+        base_uom: agg.base_uom,
+        purchase_uom: agg.purchase_uom,
+        conversion_factor: agg.conversion_factor,
+        total_quantity: total,
+        reserved_quantity: reserved,
+        available_quantity: round3(total - reserved),
+        // UI-ready dual-UOM string: "4 Bundle & 45 mtr (445 mtr Total)".
+        display_stock: uomService.formatDualStock(total, agg._product),
+        min_stock_level: agg.min_stock_level,
+        is_low_stock: total <= agg.min_stock_level,
+        // Comma-separated warehouse/godown names for this product
+        godown_names: agg._warehouses.size > 0
+          ? [...agg._warehouses].sort().join(", ")
+          : null,
+        // Comma-separated manufacturer/brand names for this product
+        brand_names: agg._manufacturers.size > 0
+          ? [...agg._manufacturers].sort().join(", ")
+          : null,
+        // Comma-separated variant colors (excluding 'Standard')
+        colors: agg._colors.size > 0
+          ? [...agg._colors].sort().join(", ")
+          : "Standard",
+      });
+    }
 
     return res.status(200).json({ success: true, count: data.length, data });
   } catch (error) {
