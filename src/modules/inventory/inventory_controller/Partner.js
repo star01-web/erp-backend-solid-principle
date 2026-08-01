@@ -71,14 +71,34 @@ const createPartner = async (req, res) => {
  */
 const getPartners = async (req, res) => {
   try {
-    const { type, status } = req.query; // Query: ?type=SUPPLIER&status=active
+    const { type, status } = req.query;
+    const searchTerm = (
+      req.query.search ||
+      req.query.q ||
+      req.query.query ||
+      req.query.searchQuery ||
+      ""
+    ).trim();
+
     let whereClause = {};
 
     if (type) whereClause.type = type;
     if (status === "active") whereClause.is_active = true;
     if (status === "inactive") whereClause.is_active = false;
 
-    const partners = await db.Partner.findAll({ where: whereClause });
+    if (searchTerm) {
+      whereClause[Op.or] = [
+        { name: { [Op.like]: `%${searchTerm}%` } },
+        { gst_number: { [Op.like]: `%${searchTerm}%` } },
+        { contact_person: { [Op.like]: `%${searchTerm}%` } },
+        { phone: { [Op.like]: `%${searchTerm}%` } },
+      ];
+    }
+
+    const partners = await db.Partner.findAll({
+      where: whereClause,
+      order: [["name", "ASC"]],
+    });
     return res.status(200).json({
       success: true,
       count: partners.length,

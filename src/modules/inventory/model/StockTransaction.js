@@ -144,9 +144,14 @@ const StockTransaction = sequelize.define(
 
     validate: {
       partnerRequired() {
-        if (["INWARD", "OUTWARD"].includes(this.type) && !this.partner_id) {
+        if (this.type === "INWARD" && !this.partner_id) {
           throw new Error(
-            `${this.type} transaction ke liye Partner (Supplier/Customer) zaroori hai.`,
+            "INWARD transaction ke liye Supplier/Partner zaroori hai.",
+          );
+        }
+        if (this.type === "OUTWARD" && !this.partner_id && !this.site_id) {
+          throw new Error(
+            "OUTWARD transaction ke liye Client (Partner) ya Site zaroori hai.",
           );
         }
       },

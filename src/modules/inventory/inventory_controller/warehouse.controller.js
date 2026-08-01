@@ -67,13 +67,33 @@ const createWarehouse = async (req, res) => {
  */
 const getWarehouses = async (req, res) => {
   try {
-    const { status } = req.query; // Query param: ?status=active
+    const { status, type } = req.query;
+    const searchTerm = (
+      req.query.search ||
+      req.query.q ||
+      req.query.query ||
+      req.query.searchQuery ||
+      ""
+    ).trim();
+
     let filter = {};
 
     if (status === "active") filter.is_active = true;
     if (status === "inactive") filter.is_active = false;
+    if (type) filter.type = type;
 
-    const warehouses = await db.Warehouse.findAll({ where: filter });
+    if (searchTerm) {
+      filter[Op.or] = [
+        { name: { [Op.like]: `%${searchTerm}%` } },
+        { location: { [Op.like]: `%${searchTerm}%` } },
+        { contact_person: { [Op.like]: `%${searchTerm}%` } },
+      ];
+    }
+
+    const warehouses = await db.Warehouse.findAll({
+      where: filter,
+      order: [["name", "ASC"]],
+    });
     return res
       .status(200)
       .json({ success: true, count: warehouses.length, warehouses });

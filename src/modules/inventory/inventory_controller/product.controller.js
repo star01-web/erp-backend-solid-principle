@@ -265,10 +265,28 @@ const bulkCreateProducts = async (req, res) => {
 
 const getAllProducts = async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, category } = req.query;
+    const searchTerm = (
+      req.query.search ||
+      req.query.q ||
+      req.query.query ||
+      req.query.searchQuery ||
+      ""
+    ).trim();
+
     let where = {};
     if (status === "active") where.is_active = true;
     if (status === "inactive") where.is_active = false;
+    if (category) where.category = category;
+
+    if (searchTerm) {
+      where[Op.or] = [
+        { name: { [Op.like]: `%${searchTerm}%` } },
+        { sku_code: { [Op.like]: `%${searchTerm}%` } },
+        { category: { [Op.like]: `%${searchTerm}%` } },
+        { description: { [Op.like]: `%${searchTerm}%` } },
+      ];
+    }
 
     const products = await db.Product.findAll({
       where,
@@ -280,6 +298,7 @@ const getAllProducts = async (req, res) => {
           through: { attributes: [] },
         },
       ],
+      order: [["name", "ASC"]],
     });
     return res
       .status(200)

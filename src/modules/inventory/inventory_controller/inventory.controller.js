@@ -294,7 +294,7 @@ const processStockMovement = async (req, res) => {
       manufacturer_id,
       color,
       quantity,
-      uom, // OPTIONAL: entered unit — base_uom ya purchase_uom (missing => base)
+      uom,
       unit_price,
       type,
       batch_number,
@@ -302,15 +302,54 @@ const processStockMovement = async (req, res) => {
       vehicle_number,
       movement_date,
       remarks,
-      site_id, // OPTIONAL: OUTWARD/DISPATCH ke saath aaye toh site ledger + site stock bhi sync hoga
+      site_id,
     } = req.body;
     const userId = req.user.id;
 
-    if (!productId || !warehouseId || quantity === undefined || !type) {
+    // Extract aliases sent by frontend forms (partner_id, partnerId, client_id, clientId, etc.)
+    const effProductId = productId || req.body.product_id;
+    const effWarehouseId = warehouseId || req.body.warehouse_id;
+    let effPartnerId =
+      partner_id ||
+      req.body.partnerId ||
+      req.body.client_id ||
+      req.body.clientId ||
+      req.body.customer_id ||
+      req.body.customerId ||
+      null;
+    const effManufacturerId = manufacturer_id || req.body.manufacturerId || null;
+    let effSiteId = site_id || req.body.siteId || null;
+
+    if (!effProductId || !effWarehouseId || quantity === undefined || !type) {
       await t.rollback();
       return res
         .status(400)
         .json({ success: false, message: "Missing required fields." });
+    }
+
+    // Smart Partner / Client / Site Resolution:
+    if (effPartnerId) {
+      const partnerObj = await db.Partner.findByPk(effPartnerId, {
+        transaction: t,
+      }).catch(() => null);
+
+      if (!partnerObj) {
+        // Check if the frontend sent a Site ID in the client/partner field
+        const siteObj = await resolveInventorySite(effPartnerId, t).catch(
+          () => null,
+        );
+        if (siteObj) {
+          if (!effSiteId) effSiteId = siteObj.id;
+          effPartnerId = null; // Clear partner_id so DB Foreign Key doesn't fail
+        } else {
+          await t.rollback();
+          return res.status(404).json({
+            success: false,
+            message:
+              "Selected Client/Partner not found. Please re-select from the list.",
+          });
+        }
+      }
     }
 
     const moveQty = Number(quantity);
@@ -322,8 +361,8 @@ const processStockMovement = async (req, res) => {
     }
 
     const [product, warehouse] = await Promise.all([
-      db.Product.findByPk(productId),
-      db.Warehouse.findByPk(warehouseId),
+      db.Product.findByPk(effProductId),
+      db.Warehouse.findByPk(effWarehouseId),
     ]);
 
     if (!product?.is_active || !warehouse?.is_active) {
@@ -362,22 +401,12 @@ const processStockMovement = async (req, res) => {
 
     // Variant the StockTransaction log will record. For deductions it is refined
     // below to the ACTUAL source bucket the stock was taken from.
-    let logManufacturerId = manufacturer_id || null;
+    let logManufacturerId = effManufacturerId || null;
     let logColor = color || "Standard";
 
     if (isDeduction) {
-      // --- BUGFIX: find WHERE the stock actually is; never create an empty
-      // bucket for an outward. Stock is keyed by (product, warehouse,
-      // manufacturer_id, color). Earlier this used findOrCreate with
-      // `manufacturer_id || null` / `color || "Standard"`, so an outward that
-      // omitted the manufacturer/color looked at an EMPTY (null/Standard)
-      // bucket, created it with qty 0, and falsely returned "Insufficient
-      // stock" even though the product had stock under another variant.
-      //
-      // Fix: constrain manufacturer_id / color ONLY when the caller actually
-      // supplied them, then deduct from the matching bucket(s). ---
-      const variantWhere = { ProductId: productId, WarehouseId: warehouseId };
-      if (manufacturer_id) variantWhere.manufacturer_id = manufacturer_id;
+      const variantWhere = { ProductId: effProductId, WarehouseId: effWarehouseId };
+      if (effManufacturerId) variantWhere.manufacturer_id = effManufacturerId;
       if (color) variantWhere.color = color;
 
       const stockRows = await db.StockLevel.findAll({
@@ -422,15 +451,15 @@ const processStockMovement = async (req, res) => {
       }
 
       // Reflect a real source bucket on the transaction log.
-      logManufacturerId = manufacturer_id || stockRows[0].manufacturer_id;
-      logColor = color || stockRows[0].color;
+      logManufacturerId = effManufacturerId || stockRows[0]?.manufacturer_id || null;
+      logColor = color || stockRows[0]?.color || "Standard";
     } else if (isAddition || moveType === "ADJUSTMENT") {
       // Additions / adjustments: create-or-get the EXACT bucket, then apply.
       const [stockRecord] = await db.StockLevel.findOrCreate({
         where: {
-          ProductId: productId,
-          WarehouseId: warehouseId,
-          manufacturer_id: manufacturer_id || null,
+          ProductId: effProductId,
+          WarehouseId: effWarehouseId,
+          manufacturer_id: effManufacturerId || null,
           color: color || "Standard",
         },
         defaults: { current_quantity: 0 },
@@ -468,9 +497,9 @@ const processStockMovement = async (req, res) => {
     const transactionLog = await db.StockTransaction.create(
       {
         date: date || new Date(),
-        ProductId: productId,
-        WarehouseId: warehouseId,
-        partner_id,
+        ProductId: effProductId,
+        WarehouseId: effWarehouseId,
+        partner_id: effPartnerId,
         manufacturer_id: logManufacturerId,
         color: logColor,
         type: moveType,
@@ -501,10 +530,10 @@ const processStockMovement = async (req, res) => {
     // hain — koi bhi step fail ho toh poora movement rollback ho jata hai.
     let siteDispatchLog = null;
     let siteStockLevel = null;
-    if (site_id && isDeduction && moveType !== "SCRAP") {
+    if (effSiteId && isDeduction && moveType !== "SCRAP") {
       // site_id inventory Site ka bhi ho sakta hai aur HRM ProjectSite ka bhi —
       // resolver dono handle karta hai.
-      const site = await resolveInventorySite(site_id, t);
+      const site = await resolveInventorySite(effSiteId, t);
       if (!site) {
         await t.rollback();
         return res
@@ -517,13 +546,14 @@ const processStockMovement = async (req, res) => {
       siteDispatchLog = await db.SiteDispatchLog.create(
         {
           site_id: site.id,
-          item_id: productId,
+          item_id: effProductId,
           transaction_type: "DISPATCH",
           quantity: absQty,
           uom: uomInfo.uom,
+          conversion_factor: uomInfo.factor,
           base_quantity: baseQty,
           transaction_date: movement_date || date || new Date(),
-          remarks: remarks || null,
+          remarks: remarks || `Dispatched via ${moveType} movement`,
           created_by: userId,
         },
         { transaction: t },
@@ -532,7 +562,7 @@ const processStockMovement = async (req, res) => {
       // 2) Site stock level update — same variant bucket jisse stock nikla.
       const siteStockWhere = {
         siteId: site.id,
-        ProductId: productId,
+        ProductId: effProductId,
         manufacturer_id: logManufacturerId || null,
         color: logColor || "Standard",
       };
@@ -1218,45 +1248,35 @@ const getAvailableStock = async (req, res) => {
       if (r.color && r.color !== "Standard") agg._colors.add(r.color);
     }
 
-    // --- Build final response array ---
-    const data = [];
-    for (const agg of productMap.values()) {
-      const total = round3(agg._total);
-      const reserved = round3(agg._reserved);
+    // --- Filter by search query if provided ---
+    const searchTerm = (
+      req.query.search ||
+      req.query.q ||
+      req.query.query ||
+      req.query.searchQuery ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
 
-      if (!includeZero && total <= 0) continue;
-
-      data.push({
-        productId: agg.productId,
-        name: agg.name,
-        sku_code: agg.sku_code,
-        unit: agg.unit,
-        base_uom: agg.base_uom,
-        purchase_uom: agg.purchase_uom,
-        conversion_factor: agg.conversion_factor,
-        total_quantity: total,
-        reserved_quantity: reserved,
-        available_quantity: round3(total - reserved),
-        // UI-ready dual-UOM string: "4 Bundle & 45 mtr (445 mtr Total)".
-        display_stock: uomService.formatDualStock(total, agg._product),
-        min_stock_level: agg.min_stock_level,
-        is_low_stock: total <= agg.min_stock_level,
-        // Comma-separated warehouse/godown names for this product
-        godown_names: agg._warehouses.size > 0
-          ? [...agg._warehouses].sort().join(", ")
-          : null,
-        // Comma-separated manufacturer/brand names for this product
-        brand_names: agg._manufacturers.size > 0
-          ? [...agg._manufacturers].sort().join(", ")
-          : null,
-        // Comma-separated variant colors (excluding 'Standard')
-        colors: agg._colors.size > 0
-          ? [...agg._colors].sort().join(", ")
-          : "Standard",
+    let filteredData = data;
+    if (searchTerm) {
+      filteredData = data.filter((item) => {
+        return (
+          (item.name && item.name.toLowerCase().includes(searchTerm)) ||
+          (item.sku_code && item.sku_code.toLowerCase().includes(searchTerm)) ||
+          (item.godown_names &&
+            item.godown_names.toLowerCase().includes(searchTerm)) ||
+          (item.brand_names &&
+            item.brand_names.toLowerCase().includes(searchTerm)) ||
+          (item.colors && item.colors.toLowerCase().includes(searchTerm))
+        );
       });
     }
 
-    return res.status(200).json({ success: true, count: data.length, data });
+    return res
+      .status(200)
+      .json({ success: true, count: filteredData.length, data: filteredData });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -1274,6 +1294,14 @@ const getTransactionHistory = async (req, res) => {
       limit = 20,
     } = req.query;
 
+    const searchTerm = (
+      req.query.search ||
+      req.query.q ||
+      req.query.query ||
+      req.query.searchQuery ||
+      ""
+    ).trim();
+
     const offset = (page - 1) * limit;
     const whereClause = {};
 
@@ -1286,17 +1314,39 @@ const getTransactionHistory = async (req, res) => {
       if (endDate) whereClause.date[Op.lte] = new Date(endDate);
     }
 
+    const productInclude = { model: db.Product, attributes: ["name", "sku_code"] };
+    const warehouseInclude = { model: db.Warehouse, attributes: ["name"] };
+    const partnerInclude = {
+      model: db.Partner,
+      as: "partner",
+      attributes: ["id", "name"],
+    };
+    const manufacturerInclude = {
+      model: db.Partner,
+      as: "originManufacturer",
+      attributes: ["id", "name"],
+    };
+
+    if (searchTerm) {
+      whereClause[Op.or] = [
+        { remarks: { [Op.like]: `%${searchTerm}%` } },
+        { batch_number: { [Op.like]: `%${searchTerm}%` } },
+        { reference_no: { [Op.like]: `%${searchTerm}%` } },
+        { vehicle_number: { [Op.like]: `%${searchTerm}%` } },
+        { "$Product.name$": { [Op.like]: `%${searchTerm}%` } },
+        { "$Product.sku_code$": { [Op.like]: `%${searchTerm}%` } },
+        { "$Warehouse.name$": { [Op.like]: `%${searchTerm}%` } },
+        { "$partner.name$": { [Op.like]: `%${searchTerm}%` } },
+      ];
+    }
+
     const { count, rows } = await db.StockTransaction.findAndCountAll({
       where: whereClause,
       include: [
-        { model: db.Product, attributes: ["name", "sku_code"] },
-        { model: db.Warehouse, attributes: ["name"] },
-        { model: db.Partner, as: "partner", attributes: ["id", "name"] },
-        {
-          model: db.Partner,
-          as: "originManufacturer",
-          attributes: ["id", "name"],
-        },
+        productInclude,
+        warehouseInclude,
+        partnerInclude,
+        manufacturerInclude,
       ],
       order: [
         ["createdAt", "DESC"],
@@ -1305,6 +1355,7 @@ const getTransactionHistory = async (req, res) => {
       ],
       limit: parseInt(limit),
       offset: parseInt(offset),
+      subQuery: false,
     });
 
     return res.status(200).json({
