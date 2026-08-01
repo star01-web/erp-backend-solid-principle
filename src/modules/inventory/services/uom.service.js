@@ -23,11 +23,31 @@ const AppError = require("../../../common/AppError");
  */
 const round3 = (n) => Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
 
-// Case-insensitive UOM compare (trims stray whitespace from the payload).
-const uomMatches = (a, b) =>
-  typeof a === "string" &&
-  typeof b === "string" &&
-  a.trim().toLowerCase() === b.trim().toLowerCase();
+// Common UOM alias maps to handle typos (e.g., 'Mettar' -> 'meter', 'mtr' -> 'meter')
+const UOM_ALIASES = {
+  meter: ["meter", "meters", "metre", "metres", "mtr", "mtrs", "mettar", "m"],
+  bundle: ["bundle", "bundles", "bdl", "bdls"],
+  pcs: ["pcs", "pc", "piece", "pieces", "nos", "no"],
+  kg: ["kg", "kgs", "kilogram", "kilograms"],
+  box: ["box", "boxes", "pkt", "packet", "packets"],
+};
+
+function normalizeUomString(s) {
+  if (!s || typeof s !== "string") return "";
+  const cleaned = s.trim().toLowerCase();
+  for (const [canonical, aliases] of Object.entries(UOM_ALIASES)) {
+    if (aliases.includes(cleaned)) return canonical;
+  }
+  return cleaned;
+}
+
+// Smart UOM compare (case-insensitive & alias-aware, handles typos like 'Mettar' -> 'Meter').
+const uomMatches = (a, b) => {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const normA = normalizeUomString(a);
+  const normB = normalizeUomString(b);
+  return normA === normB || a.trim().toLowerCase() === b.trim().toLowerCase();
+};
 
 /**
  * Universal UOM normalisation — har movement isi funnel se guzarta hai,
