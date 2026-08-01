@@ -63,6 +63,11 @@ app.use("/v2/api/inventory", dispatchLedgerRoutes);
 // ✅ NEW: Site Route Register (Jo dono tables me data feed karega)
 app.use("/v2/api/inventory/site", siteRoutes);
 
+// ✅ NEW: Reports Module Routes
+const siteReportRoutes = require("./modules/reports/routes/siteReport.route");
+app.use("/api/v1/reports", siteReportRoutes);
+app.use("/v2/api/inventory/reports", siteReportRoutes);
+
 // --- 3. Error Handling Middleware ---
 app.use((req, res) => {
   res.status(404).json({ message: "❌ Route not found" });
