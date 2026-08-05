@@ -7,14 +7,12 @@ const {
   changePasswordSchema,
   updateProfileSchema,
 } = require("../validators/auth.validator");
-const { verifyToken, authorizeRoles } = require("../middleware/authMiddleware");
+const { verifyToken } = require("../middleware/authMiddleware");
 const { userController } = require("../auth.module");
 
 // user routes
 router.post(
   "/register",
-  verifyToken,
-  authorizeRoles("ADMIN"),
   validate(registerSchema),
   asyncHandler(userController.Registration),
 );
@@ -26,7 +24,7 @@ router.put(
   asyncHandler(userController.ChangePassword),
 );
 router.put(
-  "/update-profile",
+  "/update-profile/:id",
   verifyToken,
   validate(updateProfileSchema),
   asyncHandler(userController.updateProfile),

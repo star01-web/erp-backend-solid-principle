@@ -21,12 +21,6 @@ const SiteDispatchLog = sequelize.define(
     },
 
     // --- Foreign Keys ---
-    project_id: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      references: { model: "inventory_projects", key: "id" },
-      comment: "Parent Project for audit enrichment and project-level reports",
-    },
     site_id: {
       type: DataTypes.UUID,
       allowNull: false,
@@ -92,7 +86,6 @@ const SiteDispatchLog = sequelize.define(
     timestamps: true,
     indexes: [
       // High-performance querying on large ledgers:
-      { fields: ["project_id"] }, // per-project consumption reports
       { fields: ["site_id"] }, // per-site consumption reports
       { fields: ["item_id"] }, // per-item movement history
       { fields: ["transaction_type"] }, // DISPATCH vs RETURN filters

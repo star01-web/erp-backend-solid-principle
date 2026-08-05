@@ -15,7 +15,6 @@ const {
   authorizeRoles,
 } = require("../../auth/middleware/authMiddleware");
 const validate = require("../../../common/validate");
-const cacheMiddleware = require("../../../common/cache.middleware");
 const {
   createProductSchema,
   bulkCreateProductsSchema,
@@ -64,7 +63,6 @@ router.put(
   "/movement/:id",
   verifyToken,
   canManageInventory,
-  validate(createMovementSchema, { withSuccess: true }),
   asyncHandler(invCtrl.updateStockMovement),
 );
 
@@ -88,14 +86,12 @@ router.post(
 router.get(
   "/alltransactions",
   verifyToken,
-  cacheMiddleware({ ttl: 7200 }),
   asyncHandler(invCtrl.getTransactionHistory),
 );
 
 router.get(
   "/dashboard",
   verifyToken,
-  cacheMiddleware({ ttl: 7200 }),
   asyncHandler(invCtrl.getInventoryDashboard),
 );
 
@@ -103,19 +99,13 @@ router.get(
 router.get(
   "/available-stock",
   verifyToken,
-  cacheMiddleware({ ttl: 7200 }),
   asyncHandler(invCtrl.getAvailableStock),
 );
 
 // Alias: GET /stock — same product-wise balances, `display_stock` dual-UOM
 // string ke saath ("4 Bundle & 45 mtr (445 mtr Total)") frontend rendering
 // ke liye.
-router.get(
-  "/stock",
-  verifyToken,
-  cacheMiddleware({ ttl: 7200 }),
-  asyncHandler(invCtrl.getAvailableStock),
-);
+router.get("/stock", verifyToken, asyncHandler(invCtrl.getAvailableStock));
 
 // ==========================================
 // 1b. SITE MATERIAL RETURN (Protected)
@@ -158,12 +148,7 @@ router.post(
   validate(createProductSchema, { withSuccess: true }),
   asyncHandler(prodCtrl.createProduct),
 );
-router.get(
-  "/products",
-  verifyToken,
-  cacheMiddleware({ ttl: 7200 }),
-  asyncHandler(prodCtrl.getAllProducts),
-);
+router.get("/products", verifyToken, asyncHandler(prodCtrl.getAllProducts));
 router.put(
   "/products/:id",
   verifyToken,
@@ -195,12 +180,7 @@ router.post(
   validate(createWarehouseSchema, { withSuccess: true }),
   asyncHandler(whCtrl.createWarehouse),
 );
-router.get(
-  "/warehouses",
-  verifyToken,
-  cacheMiddleware({ ttl: 7200 }),
-  asyncHandler(whCtrl.getWarehouses),
-);
+router.get("/warehouses", verifyToken, asyncHandler(whCtrl.getWarehouses));
 router.put(
   "/warehouses/:id",
   verifyToken,
@@ -225,12 +205,7 @@ router.post(
   validate(createPartnerSchema, { withSuccess: true }),
   asyncHandler(partnerCtrl.createPartner),
 );
-router.get(
-  "/partners",
-  verifyToken,
-  cacheMiddleware({ ttl: 7200 }),
-  asyncHandler(partnerCtrl.getPartners),
-);
+router.get("/partners", verifyToken, asyncHandler(partnerCtrl.getPartners));
 router.put(
   "/partners/:id",
   verifyToken,

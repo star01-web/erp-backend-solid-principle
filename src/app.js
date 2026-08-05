@@ -1,8 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-const morgan = require("morgan");
 
 const authRoutes = require("./modules/auth/routes/auth.route");
 const userRoutes = require("./modules/auth/routes/user.route");
@@ -18,29 +16,14 @@ const siteRoutes = require("./modules/inventory/Route/site.route");
 
 const app = express();
 
-// Set default NODE_ENV if missing
-if (!process.env.NODE_ENV) {
-  process.env.NODE_ENV = "production";
-}
+// --- Error Wrapper for Async Routes ---
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
 // --- 1. Middleware ---
-// Global Rate Limiter
-const globalLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 300, // 300 requests per minute per IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, message: "Too many requests, please try again later." },
-});
-app.use(globalLimiter);
-
-// HTTP Logging
-app.use(morgan("combined"));
-
-// Body Parsing Limits
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
-
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
   : ["http://localhost:3000", "http://localhost:5173", "http://localhost:8081"];
@@ -48,32 +31,18 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin && process.env.NODE_ENV !== "production") return callback(null, true);
-      if (!origin) return callback(new Error("CORS: Origin header is required in production"));
+      if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       callback(new Error(`CORS: origin '${origin}' not allowed`));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Internal-Key"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   }),
 );
 
 app.options("/", cors());
-app.use(
-  helmet({
-    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-  }),
-);
-app.use((req, res, next) => {
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(self)");
-  next();
-});
-
-// Enable internalAuth in production if secret configured
-if (process.env.NODE_ENV === "production" && process.env.INTERNAL_API_KEY_HASH) {
-  app.use(internalAuth);
-}
+app.use(helmet());
 
 // --- 2. Routes ---
 app.get("/", (req, res) => {
@@ -91,17 +60,13 @@ app.use("/v2/api/export", exportRoutes);
 // Inventory Module Routes
 app.use("/v2/api/inventory", inventoryRoutes);
 app.use("/v2/api/inventory", dispatchLedgerRoutes);
-const projectRoutes = require("./modules/inventory/Route/project.route");
-app.use("/v2/api/inventory", projectRoutes);
 // ✅ NEW: Site Route Register (Jo dono tables me data feed karega)
 app.use("/v2/api/inventory/site", siteRoutes);
 
 // ✅ NEW: Reports Module Routes
 const siteReportRoutes = require("./modules/reports/routes/siteReport.route");
-const consumptionReportRoutes = require("./modules/reports/routes/consumptionReport.route");
 app.use("/api/v1/reports", siteReportRoutes);
 app.use("/v2/api/inventory/reports", siteReportRoutes);
-app.use("/v2/api/inventory/reports", consumptionReportRoutes);
 
 // --- 3. Error Handling Middleware ---
 app.use((req, res) => {

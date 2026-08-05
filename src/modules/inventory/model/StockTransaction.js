@@ -18,7 +18,6 @@ const StockTransaction = sequelize.define(
         "ADJUSTMENT",
         "SCRAP",
         "DISPATCH",
-        "PROJECT_TRANSFER",
       ),
       allowNull: false,
     },
@@ -46,12 +45,6 @@ const StockTransaction = sequelize.define(
       type: DataTypes.UUID,
       allowNull: true,
       comment: "Link to Supplier or Customer",
-    },
-    project_id: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      references: { model: "inventory_projects", key: "id" },
-      comment: "Link to Project for warehouse-to-project outward or transfer",
     },
     manufacturer_id: {
       type: DataTypes.UUID,
@@ -168,7 +161,6 @@ const StockTransaction = sequelize.define(
       { fields: ["ProductId"] },
       { fields: ["WarehouseId"] },
       { fields: ["partner_id"] },
-      { fields: ["project_id"] },
       { fields: ["manufacturer_id"] },
       { fields: ["batch_number"] },
       { fields: ["movement_date"] },

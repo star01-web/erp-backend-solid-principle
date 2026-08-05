@@ -6,27 +6,17 @@ const SiteReportRepository = require("./repositories/siteReport.repository");
 const SiteReportService = require("./services/siteReport.service");
 const SiteReportController = require("./controllers/siteReport.controller");
 
-const ConsumptionReportRepository = require("./repositories/consumptionReport.repository");
-const ConsumptionReportService = require("./services/consumptionReport.service");
-const ConsumptionReportController = require("./controllers/consumptionReport.controller");
-
-// 1. Repositories
+// 1. Repository
 const siteReportRepository = new SiteReportRepository();
-const consumptionReportRepository = new ConsumptionReportRepository();
 
-// 2. Services
+// 2. Service
 const siteReportService = new SiteReportService({ siteReportRepository });
-const consumptionReportService = new ConsumptionReportService({ consumptionReportRepository });
 
-// 3. Controllers
+// 3. Controller
 const siteReportController = new SiteReportController({ siteReportService });
-const consumptionReportController = new ConsumptionReportController({ consumptionReportService });
 
 module.exports = {
   siteReportController,
   siteReportService,
   siteReportRepository,
-  consumptionReportController,
-  consumptionReportService,
-  consumptionReportRepository,
 };

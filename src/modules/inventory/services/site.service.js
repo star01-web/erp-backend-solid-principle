@@ -43,8 +43,6 @@ class SiteService {
    * Either both rows commit, or neither does.
    */
   async createSiteWithGeofence({
-    projectId,
-    project_id,
     projectName,
     siteName,
     managerName,
@@ -64,13 +62,11 @@ class SiteService {
 
     const cleanSiteName = String(siteName).trim();
     const radius = Number.parseInt(radiusInMeters, 10);
-    const effProjectId = projectId || project_id || null;
 
     return this.sequelize.transaction(async (t) => {
       // STEP 1: inventory_sites row (stock/dispatch anchor)
       const site = await this.siteRepo.create(
         {
-          project_id: effProjectId,
           project_name: projectName ? String(projectName).trim() : null,
           site_name: cleanSiteName,
           manager_name: managerName ? String(managerName).trim() : "Unassigned",

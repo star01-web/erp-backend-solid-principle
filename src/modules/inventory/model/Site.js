@@ -9,13 +9,7 @@ const Site = sequelize.define(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    // Link to Parent Project
-    project_id: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      references: { model: "inventory_projects", key: "id" },
-    },
-    // Direct string field (for legacy/display fallback)
+    // Direct string field (Koi JOIN ya association ki zaroorat nahi)
     project_name: {
       type: DataTypes.STRING,
       allowNull: true,

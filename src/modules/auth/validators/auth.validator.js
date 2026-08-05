@@ -4,37 +4,30 @@ const { z } = require("zod");
 const requiredString = (message) =>
   z.string({ error: message }).trim().min(1, { message });
 
-const passwordValidation = z
-  .string({ error: "Password is required" })
-  .min(8, "Password must be at least 8 characters long")
-  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-  .regex(/[0-9]/, "Password must contain at least one number")
-  .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character");
-
 // Login: previously unvalidated; zod now returns 400 (was 500) on missing fields.
 const loginSchema = z
   .object({
-    email: requiredString("Email is required").email("Valid email is required"),
+    email: requiredString("Email is required"),
     password: requiredString("Password is required"),
   })
-  .strict();
+  .loose();
 
 const registerSchema = z
   .object({
     name: requiredString("Name is required"),
-    email: requiredString("Email is required").email("Valid email is required"),
+    email: requiredString("Email is required"),
     username: requiredString("Username is required"),
-    password: passwordValidation,
+    password: requiredString("Password is required"),
     role: requiredString("Role is required"),
   })
-  .strict();
+  .loose();
 
 const changePasswordSchema = z
   .object({
-    oldPassword: requiredString("Old password is required"),
-    newPassword: passwordValidation,
+    oldPassword: requiredString("Both old and new passwords are required"),
+    newPassword: requiredString("Both old and new passwords are required"),
   })
-  .strict();
+  .loose();
 
 // Self-service profile update: `role` is intentionally NOT accepted here — a
 // user must never be able to change their own role. Role changes go through the
@@ -42,9 +35,9 @@ const changePasswordSchema = z
 const updateProfileSchema = z
   .object({
     name: z.string().trim().optional(),
-    email: z.string().trim().email("Valid email is required").optional(),
+    email: z.string().trim().optional(),
   })
-  .strict();
+  .loose();
 
 module.exports = {
   loginSchema,

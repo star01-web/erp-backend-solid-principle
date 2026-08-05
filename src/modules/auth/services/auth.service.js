@@ -14,7 +14,7 @@ const TEAM_ATTRIBUTES = [
   "position",
 ];
 
-const TOKEN_TTL_SECONDS = 14400; // 4 hours
+const TOKEN_TTL_SECONDS = 2592000; // 30 days
 
 /**
  * Login business logic. Depends only on injected repositories + cache + secret,
@@ -75,7 +75,7 @@ class AuthService {
         hrm_employee_id: employeeProfile ? employeeProfile.id : null,
       },
       this.jwtSecret,
-      { expiresIn: "4h", algorithm: "HS256" },
+      { expiresIn: "30d" },
     );
 
     // --- TIMEZONE FIX FOR LOGIN TIME ---
@@ -99,8 +99,8 @@ class AuthService {
       loginTime: loginTimeIST,
     };
 
-    // Cache Store (4 hours)
-    this.cache.setCache(`auth_token:${user.id}`, token, TOKEN_TTL_SECONDS);
+    // Cache Store (30 days)
+    this.cache.set(`auth_token:${user.id}`, token, TOKEN_TTL_SECONDS);
 
     return { token, user: user_data };
   }

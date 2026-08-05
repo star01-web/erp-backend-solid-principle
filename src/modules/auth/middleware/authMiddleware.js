@@ -1,5 +1,8 @@
 const jwt = require('jsonwebtoken');
-const redisClient = require('../../../common/redis.client');
+const NodeCache = require("node-cache");
+
+// Caching instance create karein (Standard TTL 24 hours rakha hai)
+const myCache = new NodeCache({ stdTTL: 0, checkperiod: 0 }); // 0 = Unlimited (Jab tak server restart na ho)
 
 // Fail-fast: never run without a configured JWT secret (no insecure fallback)
 if (!process.env.JWT_SECRET) {
@@ -16,12 +19,11 @@ const verifyToken = async (req, res, next) => {
     }
 
     try {
-        // 1. JWT Signature Verify karein with explicit algorithm
-        const verified = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
+        // 1. JWT Signature Verify karein
+        const verified = jwt.verify(token, JWT_SECRET);
 
-        // 2. Blacklist check via Redis (persisted across restarts)
-        const isBlacklisted = await redisClient.getCache(`blacklist:${token}`);
-        if (isBlacklisted) {
+        // 2. Blacklist check (logout ke baad token reject ho)
+        if (myCache.get(`blacklist:${token}`)) {
             return res.status(401).json({ message: "Session Expired or Logged Out. Please Login Again." });
         }
 
@@ -50,4 +52,5 @@ const authorizeRoles = (...allowedRoles) => {
     };
 };
 
-module.exports = { verifyToken, authorizeRoles };
+// Exporting cache instance taaki login/logout routes mein bhi use ho sake
+module.exports = { verifyToken, authorizeRoles, myCache };

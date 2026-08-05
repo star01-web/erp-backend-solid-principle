@@ -32,17 +32,18 @@ class DispatchService {
     warehouseRepository,
     siteRepository,
     projectSiteRepository,
-    projectStockRepository,
     sequelize,
   }) {
     this.productRepo = productRepository;
     this.logRepo = siteDispatchLogRepository;
     this.siteStockRepo = siteStockRepository;
+    // Site Material Return audit table — har return isme bhi ek row likhta
+    // hai (report/history isi table se aati hai).
     this.siteMaterialReturnRepo = siteMaterialReturnRepository;
     this.warehouseRepo = warehouseRepository;
+    // Site master repos — dual-id resolution ke liye (niche dekho).
     this.siteRepo = siteRepository;
     this.projectSiteRepo = projectSiteRepository;
-    this.projectStockRepo = projectStockRepository;
     this.sequelize = sequelize;
   }
 
@@ -104,10 +105,9 @@ class DispatchService {
    * "120 Meter") alongside the normalised base_quantity, so the ledger is
    * auditable in the user's language AND aggregatable in base UOM.
    */
-  _ledgerEntry({ siteId, itemId, qty, uom, baseQty, transactionDate, referenceNo, remarks, userId, projectId }) {
+  _ledgerEntry({ siteId, itemId, qty, uom, baseQty, transactionDate, referenceNo, remarks, userId }) {
     return {
       site_id: siteId,
-      project_id: projectId || null,
       item_id: itemId,
       quantity: qty,
       uom,
@@ -175,7 +175,6 @@ class DispatchService {
       const site = await this._resolveInventorySite(siteId, t);
       if (!site) throw new AppError("Site not found.", 404);
       const inventorySiteId = site.id;
-      const projectId = site.project_id || null;
 
       // Lock Product row for update
       const item = await this.productRepo.findById(itemId, {
@@ -189,45 +188,30 @@ class DispatchService {
 
       // Everything below is in BASE uom.
       const baseQty = this._toBaseQuantity(item, qty, uom);
+      // Snap the stored balance to the canonical 3-dp grid before comparing,
+      // mirroring the return-side guard, so "dispatch everything" never fails
+      // on float residue.
+      const currentStock = this._round3(item.total_stock);
 
-      // --- OPT-IN BRANCHING ---
-      if (projectId && this.projectStockRepo) {
-        // NEW PATH: Deduct from ProjectStockLevel
-        let projStock = await this.projectStockRepo.findForUpdate(
-          { projectId, productId: itemId },
-          t
+      // Guard: never let warehouse stock go negative.
+      if (baseQty > currentStock) {
+        throw new AppError(
+          `Insufficient stock. Available in warehouse: ${currentStock} ${item.base_uom}, ` +
+            `Requested: ${baseQty} ${item.base_uom}.`,
+          400,
         );
-        const currentProjectStock = this._round3(projStock?.current_quantity || 0);
-
-        if (baseQty > currentProjectStock) {
-          throw new AppError(
-            `Insufficient stock in Project Inventory. Available in project: ${currentProjectStock} ${item.base_uom}, ` +
-              `Requested: ${baseQty} ${item.base_uom}.`,
-            400
-          );
-        }
-
-        projStock.current_quantity = this._round3(currentProjectStock - baseQty);
-        await projStock.save({ transaction: t });
-      } else {
-        // LEGACY PATH: Deduct from main warehouse stock counter
-        const currentStock = this._round3(item.total_stock);
-        if (baseQty > currentStock) {
-          throw new AppError(
-            `Insufficient stock. Available in warehouse: ${currentStock} ${item.base_uom}, ` +
-              `Requested: ${baseQty} ${item.base_uom}.`,
-            400
-          );
-        }
-        item.total_stock = this._round3(currentStock - baseQty);
-        await item.save({ transaction: t });
       }
 
-      // 2) Append the immutable DISPATCH ledger entry
+      // 1) Deduct from the main warehouse stock counter (base UOM).
+      // Re-round after the subtraction: currentStock and baseQty are each on
+      // the 3-dp grid, but their float difference may not be (0.3 - 0.1).
+      item.total_stock = this._round3(currentStock - baseQty);
+      await item.save({ transaction: t });
+
+      // 2) Append the immutable DISPATCH ledger entry (both entered + base).
       const log = await this.logRepo.logDispatch(
         this._ledgerEntry({
           siteId: inventorySiteId,
-          projectId,
           itemId,
           qty,
           uom,
@@ -326,7 +310,6 @@ class DispatchService {
       const site = await this._resolveInventorySite(siteId, t);
       if (!site) throw new AppError("Site not found.", 404);
       const inventorySiteId = site.id;
-      const projectId = site.project_id || null;
 
       // 1) Lock Product row
       const item = await this.productRepo.findById(itemId, {
@@ -335,18 +318,28 @@ class DispatchService {
       });
       if (!item) throw new AppError("Item (Product) not found.", 404);
 
+      // Universal normalisation — the SAME funnel dispatches use, so a
+      // return entered as "120 Meter" stays 120, and "2 Bundle" becomes 100.
       const baseQty = this._toBaseQuantity(item, qty, uom);
 
-      // 2) Lock & check the SITE's own balance
+      // 2) Lock & check the SITE's own balance before allowing the return.
+      // The guard is site-specific on purpose: warehouse stock is irrelevant
+      // here — a site can only send back what it actually holds.
+      // ALL variant buckets of this (site, product) are summed: dispatches
+      // done via /movement land in per-variant buckets (manufacturer/color),
+      // so a single-bucket lookup would miss that stock and report 0.
       const siteStockRows = await this.siteStockRepo.findAllForProductForUpdate(
         { siteId: inventorySiteId, productId: itemId },
         t,
       );
 
+      // Snap the stored balance to the same 3-dp grid before comparing so a
+      // full "return everything" is never rejected by float residue.
       const currentSiteStock = this._round3(
         siteStockRows.reduce((sum, r) => sum + Number(r.inHandQty), 0),
       );
 
+      // Guard: never allow returning more than what the site actually holds
       if (baseQty > currentSiteStock) {
         throw new AppError(
           `Site ke paas return karne ke liye sufficient stock nahi hai. ` +
@@ -356,7 +349,8 @@ class DispatchService {
         );
       }
 
-      // 3) Deduct from site live balance
+      // 3) Deduct from the site's live balance — greedy drain, fullest bucket
+      // first (rows already arrive sorted DESC by inHandQty).
       let remaining = baseQty;
       for (const row of siteStockRows) {
         if (remaining <= 0) break;
@@ -367,36 +361,15 @@ class DispatchService {
         remaining = this._round3(remaining - take);
       }
 
-      // 4) Add returned quantity back (OPT-IN BRANCHING)
-      if (projectId && this.projectStockRepo) {
-        // NEW PATH: Return to ProjectStockLevel
-        let projStock = await this.projectStockRepo.findForUpdate(
-          { projectId, productId: itemId },
-          t
-        );
-        if (!projStock) {
-          projStock = await this.projectStockRepo.createForProject(
-            { projectId, productId: itemId },
-            baseQty,
-            t
-          );
-        } else {
-          projStock.current_quantity = this._round3(
-            Number(projStock.current_quantity) + baseQty
-          );
-          await projStock.save({ transaction: t });
-        }
-      } else {
-        // LEGACY PATH: Return to Product.total_stock
-        item.total_stock = this._round3(Number(item.total_stock) + baseQty);
-        await item.save({ transaction: t });
-      }
+      // 4) Add the returned quantity back to main warehouse stock (base UOM).
+      item.total_stock = this._round3(Number(item.total_stock) + baseQty);
+      await item.save({ transaction: t });
 
-      // 5) Append the immutable RETURN ledger entry
+      // 5) Append the immutable RETURN ledger entry — stores what the user
+      // typed (quantity + uom) AND the normalised base_quantity side by side.
       const log = await this.logRepo.logReturn(
         this._ledgerEntry({
           siteId: inventorySiteId,
-          projectId,
           itemId,
           qty,
           uom,
@@ -409,20 +382,43 @@ class DispatchService {
         { transaction: t },
       );
 
-      // 6) Site Material Return audit row
+      // 6) Site Material Return audit row (inventory_site_material_returns).
+      // Yehi table return report/history dikhata hai — pehle sirf ledger row
+      // ban rahi thi aur ye table khali reh jata tha (wahi bug). WarehouseId
+      // NOT NULL hai, isliye caller ka warehouse_id lo warna pehla active
+      // warehouse fallback (return warehouse-agnostic Product.total_stock me
+      // hi jata hai, isliye fallback safe hai).
       let materialReturn = null;
       if (this.siteMaterialReturnRepo) {
         let warehouse = null;
         if (warehouseId) {
-          warehouse = await this.warehouseRepo?.findById(warehouseId, { transaction: t });
+          warehouse = await this.warehouseRepo?.findById(warehouseId, {
+            transaction: t,
+          });
+          if (!warehouse) {
+            throw new AppError("Warehouse not found for warehouse_id.", 404);
+          }
+        } else {
+          warehouse = await this.warehouseRepo?.findOne(
+            { is_active: true },
+            { transaction: t },
+          );
         }
+        if (!warehouse) {
+          throw new AppError(
+            "Koi active warehouse nahi mila — return record karne ke liye warehouse_id bhejein.",
+            400,
+          );
+        }
+
+        // Variant identity: jis bucket se sabse pehle kata (fullest first),
+        // us ki manufacturer/color audit row me capture hoti hai.
         const primaryBucket = siteStockRows[0] || {};
         materialReturn = await this.siteMaterialReturnRepo.create(
           {
             siteId: inventorySiteId,
-            project_id: projectId,
             ProductId: itemId,
-            WarehouseId: warehouse ? warehouse.id : null,
+            WarehouseId: warehouse.id,
             manufacturer_id: primaryBucket.manufacturer_id || null,
             color: primaryBucket.color || "Standard",
             returnQty: baseQty,
