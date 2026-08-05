@@ -62,7 +62,7 @@ class UserService {
   /**
    * Clears the session cache entry and blacklists the token until it expires.
    */
-  logout(token) {
+  async logout(token) {
     if (!token) {
       throw new AppError("Token not provided", 400);
     }
@@ -73,12 +73,11 @@ class UserService {
     }
 
     const userId = decoded.id;
-    const isDeleted = this.cache.del(`auth_token:${userId}`);
-    console.log(`Cache Delete Result for ID ${userId}:`, isDeleted);
+    await this.cache.delKey(`auth_token:${userId}`);
 
     const expiresIn = decoded.exp - Math.floor(Date.now() / 1000);
     if (expiresIn > 0) {
-      this.cache.set(`blacklist:${token}`, "true", expiresIn);
+      await this.cache.setCache(`blacklist:${token}`, "true", expiresIn);
     }
   }
 }

@@ -42,13 +42,13 @@ const User = sequelize.define('User', {
         // Hook 1: Jab naya user bane
         beforeCreate: async (user) => {
             if (user.password) {
-                user.password = await bcrypt.hash(user.password, 10);
+                user.password = await bcrypt.hash(user.password, 12);
             }
         },
         // Hook 2: Jab user password update kare (BOHOT ZAROORI)
         beforeUpdate: async (user) => {
             if (user.changed('password')) {
-                user.password = await bcrypt.hash(user.password, 10);
+                user.password = await bcrypt.hash(user.password, 12);
             }
         }
     }

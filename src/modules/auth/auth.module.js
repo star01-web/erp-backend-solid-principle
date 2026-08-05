@@ -5,7 +5,7 @@
  */
 const db = require("../../common/index.db");
 const BaseRepository = require("../../common/BaseRepository");
-const { myCache } = require("./middleware/authMiddleware");
+const redisClient = require("../../common/redis.client");
 
 const UserRepository = require("./repositories/user.repository");
 const AuthService = require("./services/auth.service");
@@ -21,10 +21,10 @@ const employeeRepository = new BaseRepository(db.EmployeeMaster);
 const authService = new AuthService({
   userRepository,
   employeeRepository,
-  cache: myCache,
+  cache: redisClient,
   jwtSecret: process.env.JWT_SECRET,
 });
-const userService = new UserService({ userRepository, cache: myCache });
+const userService = new UserService({ userRepository, cache: redisClient });
 
 // Controllers (HTTP)
 const authController = new AuthController({ authService });

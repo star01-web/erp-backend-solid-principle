@@ -3,6 +3,7 @@ const router = express.Router();
 
 const asyncHandler = require("../../../common/asyncHandler");
 const validate = require("../../../common/validate");
+const cacheMiddleware = require("../../../common/cache.middleware");
 const {
   verifyToken,
   authorizeRoles,
@@ -42,6 +43,7 @@ router.post(
 router.get(
   "/",
   verifyToken,
+  cacheMiddleware({ ttl: 7200 }),
   asyncHandler((req, res, next) => siteController.getAllSites(req, res, next)),
 );
 
@@ -52,6 +54,7 @@ router.get(
 router.get(
   "/:id",
   verifyToken,
+  cacheMiddleware({ ttl: 7200 }),
   asyncHandler((req, res, next) => siteController.getSiteById(req, res, next)),
 );
 

@@ -212,8 +212,7 @@ const getAllProducts = async (req, res) => {
 
 const updateProduct = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { manufacturer_ids, ...updateData } = req.body;
+    const { manufacturer_ids } = req.body;
 
     const product = await db.Product.findByPk(id);
     if (!product) {
@@ -235,9 +234,23 @@ const updateProduct = async (req, res) => {
       }
     }
 
-    const stringFields = ["name", "category", "unit", "hsn_code"];
-    stringFields.forEach((field) => {
-      if (updateData[field]) updateData[field] = updateData[field].trim();
+    const allowedFields = [
+      "name",
+      "category",
+      "unit",
+      "hsn_code",
+      "min_stock_level",
+      "max_stock_level",
+      "is_active",
+    ];
+    const updateData = {};
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        updateData[field] =
+          typeof req.body[field] === "string"
+            ? req.body[field].trim()
+            : req.body[field];
+      }
     });
 
     await product.update(updateData);
@@ -1248,6 +1261,31 @@ const getAvailableStock = async (req, res) => {
       if (r.color && r.color !== "Standard") agg._colors.add(r.color);
     }
 
+    // --- Build response array from aggregated map ---
+    const data = Array.from(productMap.values()).map((agg) => {
+      const display_stock = uomService.formatDualStock(
+        agg._total,
+        agg._product,
+      );
+      return {
+        productId: agg.productId,
+        name: agg.name,
+        sku_code: agg.sku_code,
+        unit: agg.unit,
+        base_uom: agg.base_uom,
+        purchase_uom: agg.purchase_uom,
+        conversion_factor: agg.conversion_factor,
+        min_stock_level: agg.min_stock_level,
+        current_quantity: agg._total,
+        reserved_quantity: agg._reserved,
+        available_quantity: agg._total - agg._reserved,
+        display_stock,
+        godown_names: Array.from(agg._warehouses).join(", "),
+        brand_names: Array.from(agg._manufacturers).join(", "),
+        colors: Array.from(agg._colors).join(", "),
+      };
+    });
+
     // --- Filter by search query if provided ---
     const searchTerm = (
       req.query.search ||
@@ -1259,9 +1297,9 @@ const getAvailableStock = async (req, res) => {
       .trim()
       .toLowerCase();
 
-    let filteredData = data;
+    let filteredData = includeZero ? data : data.filter((item) => item.current_quantity > 0);
     if (searchTerm) {
-      filteredData = data.filter((item) => {
+      filteredData = filteredData.filter((item) => {
         return (
           (item.name && item.name.toLowerCase().includes(searchTerm)) ||
           (item.sku_code && item.sku_code.toLowerCase().includes(searchTerm)) ||
@@ -1328,15 +1366,16 @@ const getTransactionHistory = async (req, res) => {
     };
 
     if (searchTerm) {
+      const escapedSearch = searchTerm.replace(/[%_]/g, "\\$&");
       whereClause[Op.or] = [
-        { remarks: { [Op.like]: `%${searchTerm}%` } },
-        { batch_number: { [Op.like]: `%${searchTerm}%` } },
-        { reference_no: { [Op.like]: `%${searchTerm}%` } },
-        { vehicle_number: { [Op.like]: `%${searchTerm}%` } },
-        { "$Product.name$": { [Op.like]: `%${searchTerm}%` } },
-        { "$Product.sku_code$": { [Op.like]: `%${searchTerm}%` } },
-        { "$Warehouse.name$": { [Op.like]: `%${searchTerm}%` } },
-        { "$partner.name$": { [Op.like]: `%${searchTerm}%` } },
+        { remarks: { [Op.like]: `%${escapedSearch}%` } },
+        { batch_number: { [Op.like]: `%${escapedSearch}%` } },
+        { reference_no: { [Op.like]: `%${escapedSearch}%` } },
+        { vehicle_number: { [Op.like]: `%${escapedSearch}%` } },
+        { "$Product.name$": { [Op.like]: `%${escapedSearch}%` } },
+        { "$Product.sku_code$": { [Op.like]: `%${escapedSearch}%` } },
+        { "$Warehouse.name$": { [Op.like]: `%${escapedSearch}%` } },
+        { "$partner.name$": { [Op.like]: `%${escapedSearch}%` } },
       ];
     }
 

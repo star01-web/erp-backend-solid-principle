@@ -21,8 +21,14 @@ const SiteMaterialReturn = sequelize.define(
     },
     WarehouseId: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true,
       references: { model: "inventory_warehouses", key: "id" },
+    },
+    project_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: "inventory_projects", key: "id" },
+      comment: "Target project for returns from site",
     },
     manufacturer_id: {
       type: DataTypes.UUID,
@@ -68,6 +74,7 @@ const SiteMaterialReturn = sequelize.define(
       { fields: ["siteId"] },
       { fields: ["ProductId"] },
       { fields: ["WarehouseId"] },
+      { fields: ["project_id"] },
       { fields: ["manufacturer_id"] },
       { fields: ["returnDate"] },
     ],

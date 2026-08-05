@@ -3,6 +3,7 @@ const router = express.Router();
 
 const asyncHandler = require("../../../common/asyncHandler");
 const validate = require("../../../common/validate");
+const cacheMiddleware = require("../../../common/cache.middleware");
 const { verifyToken } = require("../../auth/middleware/authMiddleware");
 const {
   siteMaterialSummaryQuerySchema,
@@ -21,6 +22,7 @@ router.get(
     source: "query",
     withSuccess: true,
   }),
+  cacheMiddleware({ ttl: 7200 }),
   asyncHandler((req, res, next) =>
     siteReportController.getSiteMaterialSummary(req, res, next),
   ),

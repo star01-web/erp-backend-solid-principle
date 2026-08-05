@@ -1,40 +1,50 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../../../common/db.config");
 
-const Site = sequelize.define(
-  "Site",
+const Project = sequelize.define(
+  "Project",
   {
     id: {
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    // Link to Parent Project
-    project_id: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      references: { model: "inventory_projects", key: "id" },
-    },
-    // Direct string field (for legacy/display fallback)
     project_name: {
       type: DataTypes.STRING,
+      allowNull: false,
+      unique: true,
+    },
+    project_code: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      unique: true,
+    },
+    description: {
+      type: DataTypes.TEXT,
       allowNull: true,
     },
-    site_name: {
+    client_name: {
       type: DataTypes.STRING,
-      allowNull: false,
+      allowNull: true,
     },
     manager_name: {
       type: DataTypes.STRING,
       allowNull: true,
-      defaultValue: "Unassigned",
     },
     contact_number: {
       type: DataTypes.STRING(100),
       allowNull: true,
     },
-    site_location: {
+    location: {
       type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    start_date: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    end_date: {
+      type: DataTypes.DATE,
       allowNull: true,
     },
     is_active: {
@@ -43,10 +53,10 @@ const Site = sequelize.define(
     },
   },
   {
-    tableName: "inventory_sites",
+    tableName: "inventory_projects",
     timestamps: true,
     paranoid: true,
-  },
+  }
 );
 
-module.exports = Site;
+module.exports = Project;

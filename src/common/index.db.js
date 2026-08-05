@@ -16,6 +16,9 @@ const Site = require("../modules/inventory/model/Site");
 const SiteStockLevel = require("../modules/inventory/model/SiteStockLevel");
 const SiteMaterialReturn = require("../modules/inventory/model/SiteMaterialReturn");
 const SiteDispatchLog = require("../modules/inventory/model/SiteDispatchLog");
+const Project = require("../modules/inventory/model/Project");
+const ProjectStockLevel = require("../modules/inventory/model/ProjectStockLevel");
+
 const db = {
   sequelize,
   Sequelize,
@@ -35,6 +38,9 @@ const db = {
   SiteStockLevel,
   SiteMaterialReturn,
   SiteDispatchLog,
+  // Project Inventory Models
+  Project,
+  ProjectStockLevel,
 };
 
 // --- ASSOCIATIONS (RELATIONS) ---
@@ -184,5 +190,55 @@ db.Product.hasMany(db.SiteDispatchLog, {
   as: "dispatchLogs",
 });
 db.SiteDispatchLog.belongsTo(db.Product, { foreignKey: "item_id", as: "item" });
+
+// --- PROJECT MANAGEMENT ASSOCIATIONS ---
+
+// 1. Project ↔ Site (One-to-Many)
+db.Project.hasMany(db.Site, { foreignKey: "project_id", as: "sites" });
+db.Site.belongsTo(db.Project, { foreignKey: "project_id", as: "project" });
+
+// 2. Project ↔ ProjectStockLevel (One-to-Many)
+db.Project.hasMany(db.ProjectStockLevel, {
+  foreignKey: "project_id",
+  as: "stockLevels",
+});
+db.ProjectStockLevel.belongsTo(db.Project, {
+  foreignKey: "project_id",
+  as: "project",
+});
+
+// 3. Product ↔ ProjectStockLevel (One-to-Many)
+db.Product.hasMany(db.ProjectStockLevel, { foreignKey: "ProductId" });
+db.ProjectStockLevel.belongsTo(db.Product, { foreignKey: "ProductId" });
+
+// 4. Project ↔ SiteDispatchLog (One-to-Many audit enrichment)
+db.Project.hasMany(db.SiteDispatchLog, {
+  foreignKey: "project_id",
+  as: "dispatchLogs",
+});
+db.SiteDispatchLog.belongsTo(db.Project, {
+  foreignKey: "project_id",
+  as: "project",
+});
+
+// 5. Project ↔ StockTransaction (One-to-Many audit enrichment)
+db.Project.hasMany(db.StockTransaction, {
+  foreignKey: "project_id",
+  as: "transactions",
+});
+db.StockTransaction.belongsTo(db.Project, {
+  foreignKey: "project_id",
+  as: "project",
+});
+
+// 6. Project ↔ SiteMaterialReturn (One-to-Many)
+db.Project.hasMany(db.SiteMaterialReturn, {
+  foreignKey: "project_id",
+  as: "materialReturns",
+});
+db.SiteMaterialReturn.belongsTo(db.Project, {
+  foreignKey: "project_id",
+  as: "project",
+});
 
 module.exports = db;
