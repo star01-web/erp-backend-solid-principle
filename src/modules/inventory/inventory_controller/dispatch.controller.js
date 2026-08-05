@@ -166,6 +166,28 @@ class DispatchController {
       return this._fail(res, error, "Failed to fetch site stock levels", next);
     }
   };
+
+  // GET /ledger/history — list dispatch logs with populated site_name and item_name
+  getDispatchLogs = async (req, res, next) => {
+    try {
+      const { site_id, item_id, transaction_type } = req.query;
+
+      const logs = await this.service.getDispatchLogs({
+        siteId: site_id,
+        itemId: item_id,
+        transaction_type,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Dispatch logs history fetched successfully.",
+        count: logs.length,
+        data: logs,
+      });
+    } catch (error) {
+      return this._fail(res, error, "Failed to fetch dispatch logs history", next);
+    }
+  };
 }
 
 module.exports = DispatchController;

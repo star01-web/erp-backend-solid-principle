@@ -233,7 +233,19 @@ class DispatchService {
       }
 
       return {
-        log,
+        log: {
+          ...log.toJSON(),
+          site_name: site.site_name,
+          project_name: site.project_name || null,
+          item_name: item.name,
+          sku_code: item.sku_code || null,
+        },
+        site_id: inventorySiteId,
+        site_name: site.site_name,
+        project_name: site.project_name || null,
+        item_id: itemId,
+        item_name: item.name,
+        sku_code: item.sku_code || null,
         base_uom: item.base_uom,
         remaining_warehouse_stock: Number(item.total_stock),
         site_current_stock: Number(siteStock.inHandQty),
@@ -403,8 +415,20 @@ class DispatchService {
       }
 
       return {
-        log,
+        log: {
+          ...log.toJSON(),
+          site_name: site.site_name,
+          project_name: site.project_name || null,
+          item_name: item.name,
+          sku_code: item.sku_code || null,
+        },
         material_return: materialReturn,
+        site_id: inventorySiteId,
+        site_name: site.site_name,
+        project_name: site.project_name || null,
+        item_id: itemId,
+        item_name: item.name,
+        sku_code: item.sku_code || null,
         base_uom: item.base_uom,
         returned_in_base_uom: baseQty,
         remaining_warehouse_stock: Number(item.total_stock),
@@ -479,6 +503,40 @@ class DispatchService {
       item_count: items.length,
       items,
     };
+  }
+
+  /**
+   * Fetch dispatch ledger logs history populated with site_name and item_name.
+   */
+  async getDispatchLogs(filters = {}) {
+    let resolvedSiteId = null;
+    if (filters.siteId) {
+      const site = await this._resolveInventorySite(filters.siteId);
+      resolvedSiteId = site ? site.id : filters.siteId;
+    }
+
+    const logs = await this.logRepo.getDispatchLogs({
+      ...filters,
+      ...(resolvedSiteId && { siteId: resolvedSiteId }),
+    });
+
+    return logs.map((log) => ({
+      id: log.id,
+      site_id: log.site_id,
+      site_name: log.site ? log.site.site_name : null,
+      project_name: log.site ? log.site.project_name : null,
+      item_id: log.item_id,
+      item_name: log.item ? log.item.name : null,
+      sku_code: log.item ? log.item.sku_code : null,
+      transaction_type: log.transaction_type,
+      quantity: Number(log.quantity),
+      uom: log.uom,
+      base_quantity: Number(log.base_quantity),
+      transaction_date: log.transaction_date,
+      remarks: log.remarks,
+      created_by: log.created_by,
+      createdAt: log.createdAt,
+    }));
   }
 }
 

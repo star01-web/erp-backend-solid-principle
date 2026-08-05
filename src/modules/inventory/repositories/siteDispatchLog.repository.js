@@ -125,7 +125,35 @@ class SiteDispatchLogRepository extends BaseRepository {
   }
 
   /**
-   * 4. NEW: Fetch Ledger History for a specific Site & Item (Useful for stock audit)
+   * 4. Fetch Ledger History with populated Site & Product (Item) details.
+   */
+  getDispatchLogs(filters = {}, options = {}) {
+    const where = {};
+    if (filters.siteId) where.site_id = filters.siteId;
+    if (filters.itemId) where.item_id = filters.itemId;
+    if (filters.transaction_type) where.transaction_type = filters.transaction_type;
+
+    return this.model.findAll({
+      where,
+      include: [
+        {
+          model: db.Site,
+          as: "site",
+          attributes: ["id", "site_name", "project_name"],
+        },
+        {
+          model: db.Product,
+          as: "item",
+          attributes: ["id", "name", "sku_code", "base_uom"],
+        },
+      ],
+      order: [["transaction_date", "DESC"], ["createdAt", "DESC"]],
+      ...options,
+    });
+  }
+
+  /**
+   * 5. Fetch Ledger History for a specific Site & Item (Useful for stock audit)
    */
   getSiteItemLedger(siteId, itemId, options = {}) {
     return this.model.findAll({

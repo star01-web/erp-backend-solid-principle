@@ -84,4 +84,18 @@ router.get(
   ),
 );
 
+/**
+ * @route   GET /v2/api/inventory/ledger/history
+ * @desc    Fetch dispatch/return history logs with populated site_name and item_name.
+ *          Optional query params: site_id, item_id, transaction_type ('DISPATCH' | 'RETURN')
+ * @access  Private (Any Authenticated User)
+ */
+router.get(
+  "/ledger/history",
+  verifyToken,
+  asyncHandler((req, res, next) =>
+    dispatchController.getDispatchLogs(req, res, next),
+  ),
+);
+
 module.exports = router;
