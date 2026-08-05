@@ -105,7 +105,7 @@ class DispatchService {
    * "120 Meter") alongside the normalised base_quantity, so the ledger is
    * auditable in the user's language AND aggregatable in base UOM.
    */
-  _ledgerEntry({ siteId, itemId, qty, uom, baseQty, transactionDate, remarks, userId }) {
+  _ledgerEntry({ siteId, itemId, qty, uom, baseQty, transactionDate, referenceNo, remarks, userId }) {
     return {
       site_id: siteId,
       item_id: itemId,
@@ -113,6 +113,7 @@ class DispatchService {
       uom,
       base_quantity: baseQty,
       transaction_date: transactionDate || new Date(),
+      reference_no: referenceNo || null,
       remarks: remarks || null,
       created_by: userId || null,
     };
@@ -154,11 +155,17 @@ class DispatchService {
     quantity,
     uom,
     remarks,
+    referenceNo,
+    reference_no,
+    reference_number,
+    ref_no,
     transactionDate,
     userId,
   }) {
     const qty = this._parsePositiveQty(quantity);
     this._assertValidInput(siteId, itemId, qty, uom);
+
+    const refNo = referenceNo || reference_no || reference_number || ref_no || null;
 
     return this.sequelize.transaction(async (t) => {
       // Resolve FIRST: UI inventory-Site id ya HRM ProjectSite id — dono bhej
@@ -210,6 +217,7 @@ class DispatchService {
           uom,
           baseQty,
           transactionDate,
+          referenceNo: refNo,
           remarks,
           userId,
         }),
@@ -235,11 +243,13 @@ class DispatchService {
       return {
         log: {
           ...log.toJSON(),
+          reference_no: refNo,
           site_name: site.site_name,
           project_name: site.project_name || null,
           item_name: item.name,
           sku_code: item.sku_code || null,
         },
+        reference_no: refNo,
         site_id: inventorySiteId,
         site_name: site.site_name,
         project_name: site.project_name || null,
@@ -268,6 +278,10 @@ class DispatchService {
     quantity,
     uom,
     remarks,
+    referenceNo,
+    reference_no,
+    reference_number,
+    ref_no,
     transactionDate,
     userId,
     warehouseId,
@@ -275,6 +289,8 @@ class DispatchService {
   }) {
     const qty = this._parsePositiveQty(quantity);
     this._assertValidInput(siteId, itemId, qty, uom);
+
+    const refNo = referenceNo || reference_no || reference_number || ref_no || null;
 
     // Return ki haalat — SiteMaterialReturn ENUM se match honi chahiye,
     // warna insert DB-level error par girta (aur poora return rollback hota).
@@ -359,6 +375,7 @@ class DispatchService {
           uom,
           baseQty,
           transactionDate,
+          referenceNo: refNo,
           remarks,
           userId,
         }),
@@ -417,12 +434,14 @@ class DispatchService {
       return {
         log: {
           ...log.toJSON(),
+          reference_no: refNo,
           site_name: site.site_name,
           project_name: site.project_name || null,
           item_name: item.name,
           sku_code: item.sku_code || null,
         },
         material_return: materialReturn,
+        reference_no: refNo,
         site_id: inventorySiteId,
         site_name: site.site_name,
         project_name: site.project_name || null,
@@ -472,13 +491,10 @@ class DispatchService {
 
   /**
    * Net consumption per item for one site, computed on base_quantity.
-   * Delegates the grouped SQL to the repository, then normalises the shape.
    */
   async getConsumptionReport(siteId) {
     if (!siteId) throw new AppError("siteId param zaroori hai.", 400);
 
-    // Ledger rows inventory-site id par anchored hain; UI dono id bhej
-    // sakta hai, isliye pehle resolve karo.
     const site = await this._resolveInventorySite(siteId);
     if (!site) throw new AppError("Site not found.", 404);
 
@@ -506,7 +522,7 @@ class DispatchService {
   }
 
   /**
-   * Fetch dispatch ledger logs history populated with site_name and item_name.
+   * Fetch dispatch ledger logs history populated with site_name, item_name and reference_no.
    */
   async getDispatchLogs(filters = {}) {
     let resolvedSiteId = null;
@@ -529,6 +545,7 @@ class DispatchService {
       item_name: log.item ? log.item.name : null,
       sku_code: log.item ? log.item.sku_code : null,
       transaction_type: log.transaction_type,
+      reference_no: log.reference_no || null,
       quantity: Number(log.quantity),
       uom: log.uom,
       base_quantity: Number(log.base_quantity),

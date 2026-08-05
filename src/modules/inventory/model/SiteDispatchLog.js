@@ -68,6 +68,11 @@ const SiteDispatchLog = sequelize.define(
       allowNull: false,
       defaultValue: DataTypes.NOW,
     },
+    reference_no: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      comment: "Reference/Challan/Invoice number for dispatch or return",
+    },
     remarks: { type: DataTypes.TEXT },
 
     // Audit column — consistent with the other inventory tables.

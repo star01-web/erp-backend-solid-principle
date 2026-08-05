@@ -47,8 +47,17 @@ class DispatchController {
   // POST /ledger/dispatch
   dispatchItem = async (req, res, next) => {
     try {
-      const { site_id, item_id, quantity, uom, remarks, transaction_date } =
-        req.body;
+      const {
+        site_id,
+        item_id,
+        quantity,
+        uom,
+        remarks,
+        reference_no,
+        reference_number,
+        ref_no,
+        transaction_date,
+      } = req.body;
 
       // Quick HTTP-level validation before calling service
       if (!site_id || !item_id || quantity === undefined || !uom) {
@@ -64,6 +73,7 @@ class DispatchController {
         quantity,
         uom,
         remarks,
+        reference_no: reference_no || reference_number || ref_no || null,
         transactionDate: transaction_date,
         userId: req.user?.id || null, // Auth token se user id pick karega
       });
@@ -88,6 +98,9 @@ class DispatchController {
         quantity,
         uom,
         remarks,
+        reference_no,
+        reference_number,
+        ref_no,
         transaction_date,
         warehouse_id,
         condition,
@@ -107,6 +120,7 @@ class DispatchController {
         quantity,
         uom,
         remarks,
+        reference_no: reference_no || reference_number || ref_no || null,
         transactionDate: transaction_date,
         userId: req.user?.id || null,
         // Site Material Return audit row ke liye — kis warehouse me wapas
