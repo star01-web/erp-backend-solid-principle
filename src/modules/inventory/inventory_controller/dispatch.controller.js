@@ -184,19 +184,45 @@ class DispatchController {
   // GET /ledger/history — list dispatch logs with populated site_name and item_name
   getDispatchLogs = async (req, res, next) => {
     try {
-      const { site_id, item_id, transaction_type } = req.query;
+      const {
+        site_id,
+        item_id,
+        transaction_type,
+        startDate,
+        endDate,
+        search,
+        page,
+        limit,
+      } = req.query;
 
-      const logs = await this.service.getDispatchLogs({
+      const result = await this.service.getDispatchLogs({
         siteId: site_id,
         itemId: item_id,
         transaction_type,
+        startDate,
+        endDate,
+        search: search || req.query.q || req.query.query || "",
+        page: page !== undefined ? page : 1,
+        limit: limit !== undefined ? limit : 20,
       });
+
+      const isObjectResult = result && typeof result === "object" && !Array.isArray(result);
+      const data = isObjectResult ? result.data : result;
+      const count = isObjectResult ? result.count : result.length;
 
       return res.status(200).json({
         success: true,
         message: "Dispatch logs history fetched successfully.",
-        count: logs.length,
-        data: logs,
+        count: count,
+        totalItems: count,
+        totalPages: isObjectResult ? result.totalPages : 1,
+        currentPage: isObjectResult ? result.currentPage : 1,
+        limit: isObjectResult ? result.limit : count,
+        ...(isObjectResult && {
+          hasNextPage: result.hasNextPage,
+          hasPrevPage: result.hasPrevPage,
+        }),
+        data: data,
       });
     } catch (error) {
       return this._fail(res, error, "Failed to fetch dispatch logs history", next);

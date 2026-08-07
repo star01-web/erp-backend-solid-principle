@@ -1,4 +1,4 @@
-const { fn, literal } = require("sequelize");
+const { fn, literal, Op } = require("sequelize");
 const BaseRepository = require("../../../common/BaseRepository");
 const db = require("../../../common/index.db");
 
@@ -127,13 +127,54 @@ class SiteDispatchLogRepository extends BaseRepository {
   /**
    * 4. Fetch Ledger History with populated Site & Product (Item) details.
    */
-  getDispatchLogs(filters = {}, options = {}) {
+  async getDispatchLogs(filters = {}, options = {}) {
     const where = {};
     if (filters.siteId) where.site_id = filters.siteId;
     if (filters.itemId) where.item_id = filters.itemId;
-    if (filters.transaction_type) where.transaction_type = filters.transaction_type;
 
-    return this.model.findAll({
+    if (filters.transaction_type) {
+      const tType = String(filters.transaction_type).trim().toUpperCase();
+      if (tType === "OUTWARD" || tType === "DISPATCH" || tType === "OUT") {
+        where.transaction_type = "DISPATCH";
+      } else if (tType === "RETURN" || tType === "INWARD" || tType === "IN") {
+        where.transaction_type = "RETURN";
+      } else if (tType !== "ALL") {
+        where.transaction_type = tType;
+      }
+    }
+
+    if (filters.startDate || filters.endDate) {
+      where.transaction_date = {};
+      if (filters.startDate) {
+        const start = new Date(filters.startDate);
+        if (!isNaN(start.getTime())) {
+          start.setUTCHours(0, 0, 0, 0);
+          where.transaction_date[Op.gte] = start;
+        }
+      }
+      if (filters.endDate) {
+        const end = new Date(filters.endDate);
+        if (!isNaN(end.getTime())) {
+          end.setUTCHours(23, 59, 59, 999);
+          where.transaction_date[Op.lte] = end;
+        }
+      }
+    }
+
+    if (filters.search) {
+      const searchClean = String(filters.search).trim().replace(/[%_\\]/g, "\\$&");
+      if (searchClean) {
+        where[Op.or] = [
+          { reference_no: { [Op.like]: `%${searchClean}%` } },
+          { remarks: { [Op.like]: `%${searchClean}%` } },
+          { "$site.site_name$": { [Op.like]: `%${searchClean}%` } },
+          { "$item.name$": { [Op.like]: `%${searchClean}%` } },
+          { "$item.sku_code$": { [Op.like]: `%${searchClean}%` } },
+        ];
+      }
+    }
+
+    const queryConfig = {
       where,
       include: [
         {
@@ -149,7 +190,17 @@ class SiteDispatchLogRepository extends BaseRepository {
       ],
       order: [["transaction_date", "DESC"], ["createdAt", "DESC"]],
       ...options,
-    });
+    };
+
+    if (options.limit !== undefined) {
+      return this.model.findAndCountAll({
+        ...queryConfig,
+        distinct: true,
+        col: "log_id",
+      });
+    }
+
+    return this.model.findAll(queryConfig);
   }
 
   /**

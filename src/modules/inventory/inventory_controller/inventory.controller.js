@@ -1282,6 +1282,95 @@ const getAvailableStock = async (req, res) => {
   }
 };
 
+// Hard ceilings to prevent Node.js OOM
+const MAX_PAGE_LIMIT = 2000;
+const DEFAULT_PAGE_LIMIT = 20;
+
+// Canonical ENUM & Alias Maps
+const VALID_TRANSACTION_TYPES = new Set([
+  "INWARD",
+  "OUTWARD",
+  "RETURN",
+  "DAMAGE",
+  "ADJUSTMENT",
+  "SCRAP",
+  "DISPATCH",
+]);
+
+const TYPE_ALIASES = {
+  OUT: ["OUTWARD"],
+  OUTWARD: ["OUTWARD"],
+  IN: ["INWARD"],
+  INWARD: ["INWARD"],
+  DISPATCH: ["DISPATCH"],
+  RETURN: ["RETURN"],
+  DAMAGE: ["DAMAGE"],
+  SCRAP: ["SCRAP"],
+  ADJUSTMENT: ["ADJUSTMENT"],
+  ALL_OUTWARD: ["OUTWARD", "DISPATCH", "SCRAP", "DAMAGE"],
+  ALL_OUT: ["OUTWARD", "DISPATCH", "SCRAP", "DAMAGE"],
+  OUTWARDS: ["OUTWARD", "DISPATCH", "SCRAP", "DAMAGE"],
+  ALL_INWARD: ["INWARD", "RETURN"],
+  ALL_IN: ["INWARD", "RETURN"],
+  INWARDS: ["INWARD", "RETURN"],
+};
+
+/**
+ * Safely parse date range to encompass entire start and end days without timezone drift.
+ */
+const parseDateBoundary = (dateStr, isEndOfDay = false) => {
+  if (!dateStr) return null;
+  const trimmed = typeof dateStr === "string" ? dateStr.trim() : "";
+  if (!trimmed) return null;
+
+  // If date-only string provided (e.g. YYYY-MM-DD)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [year, month, day] = trimmed.split("-").map(Number);
+    if (isEndOfDay) {
+      return new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+    }
+    return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  }
+
+  const d = new Date(trimmed);
+  if (isNaN(d.getTime())) return null;
+
+  if (isEndOfDay) {
+    d.setUTCHours(23, 59, 59, 999);
+  } else {
+    d.setUTCHours(0, 0, 0, 0);
+  }
+  return d;
+};
+
+/**
+ * Parse and normalize incoming type query param (string, array, or comma-separated).
+ */
+const parseTransactionTypes = (typeInput) => {
+  if (!typeInput) return null;
+
+  let rawTypes = [];
+  if (Array.isArray(typeInput)) {
+    rawTypes = typeInput.flatMap((t) => (typeof t === "string" ? t.split(",") : []));
+  } else if (typeof typeInput === "string") {
+    rawTypes = typeInput.split(",");
+  }
+
+  const resolvedTypes = new Set();
+  for (const raw of rawTypes) {
+    const cleaned = String(raw).trim().toUpperCase();
+    if (!cleaned) continue;
+
+    if (TYPE_ALIASES[cleaned]) {
+      TYPE_ALIASES[cleaned].forEach((t) => resolvedTypes.add(t));
+    } else if (VALID_TRANSACTION_TYPES.has(cleaned)) {
+      resolvedTypes.add(cleaned);
+    }
+  }
+
+  return resolvedTypes.size > 0 ? Array.from(resolvedTypes) : null;
+};
+
 const getTransactionHistory = async (req, res) => {
   try {
     const {
@@ -1291,7 +1380,7 @@ const getTransactionHistory = async (req, res) => {
       startDate,
       endDate,
       page = 1,
-      limit = 20,
+      limit = DEFAULT_PAGE_LIMIT,
     } = req.query;
 
     const searchTerm = (
@@ -1302,19 +1391,65 @@ const getTransactionHistory = async (req, res) => {
       ""
     ).trim();
 
-    const offset = (page - 1) * limit;
+    // 1. Pagination & Memory Safety Guard
+    const isAll =
+      String(limit).toLowerCase() === "all" || parseInt(limit, 10) === -1;
+    const rawPage = parseInt(page, 10);
+    const parsedPage = rawPage > 0 ? rawPage : 1;
+
+    const rawLimit = parseInt(limit, 10);
+    const parsedLimit = isAll
+      ? MAX_PAGE_LIMIT
+      : rawLimit > 0
+        ? Math.min(MAX_PAGE_LIMIT, rawLimit)
+        : DEFAULT_PAGE_LIMIT;
+    const offset = isAll ? 0 : (parsedPage - 1) * parsedLimit;
+
+    // 2. Build Where Clauses
     const whereClause = {};
 
     if (productId) whereClause.ProductId = productId;
     if (warehouseId) whereClause.WarehouseId = warehouseId;
-    if (type) whereClause.type = type;
-    if (startDate || endDate) {
-      whereClause.date = {};
-      if (startDate) whereClause.date[Op.gte] = new Date(startDate);
-      if (endDate) whereClause.date[Op.lte] = new Date(endDate);
+
+    // Type Matching (Case-insensitive, Multi-type & Aliases)
+    const normalizedTypes = parseTransactionTypes(type);
+    if (normalizedTypes) {
+      whereClause.type =
+        normalizedTypes.length === 1
+          ? normalizedTypes[0]
+          : { [Op.in]: normalizedTypes };
     }
 
-    const productInclude = { model: db.Product, attributes: ["name", "sku_code"] };
+    // Safe Date Range Filtering
+    const parsedStart = parseDateBoundary(startDate, false);
+    const parsedEnd = parseDateBoundary(endDate, true);
+
+    if (parsedStart || parsedEnd) {
+      whereClause.date = {};
+      if (parsedStart) whereClause.date[Op.gte] = parsedStart;
+      if (parsedEnd) whereClause.date[Op.lte] = parsedEnd;
+    }
+
+    // Search Filter with Escaped Wildcards
+    if (searchTerm) {
+      const escapedSearch = searchTerm.replace(/[%_\\]/g, "\\$&");
+      whereClause[Op.or] = [
+        { remarks: { [Op.like]: `%${escapedSearch}%` } },
+        { batch_number: { [Op.like]: `%${escapedSearch}%` } },
+        { reference_no: { [Op.like]: `%${escapedSearch}%` } },
+        { vehicle_number: { [Op.like]: `%${escapedSearch}%` } },
+        { "$Product.name$": { [Op.like]: `%${escapedSearch}%` } },
+        { "$Product.sku_code$": { [Op.like]: `%${escapedSearch}%` } },
+        { "$Warehouse.name$": { [Op.like]: `%${escapedSearch}%` } },
+        { "$partner.name$": { [Op.like]: `%${escapedSearch}%` } },
+      ];
+    }
+
+    // 3. Includes Configuration
+    const productInclude = {
+      model: db.Product,
+      attributes: ["name", "sku_code", "base_uom", "unit"],
+    };
     const warehouseInclude = { model: db.Warehouse, attributes: ["name"] };
     const partnerInclude = {
       model: db.Partner,
@@ -1327,19 +1462,7 @@ const getTransactionHistory = async (req, res) => {
       attributes: ["id", "name"],
     };
 
-    if (searchTerm) {
-      whereClause[Op.or] = [
-        { remarks: { [Op.like]: `%${searchTerm}%` } },
-        { batch_number: { [Op.like]: `%${searchTerm}%` } },
-        { reference_no: { [Op.like]: `%${searchTerm}%` } },
-        { vehicle_number: { [Op.like]: `%${searchTerm}%` } },
-        { "$Product.name$": { [Op.like]: `%${searchTerm}%` } },
-        { "$Product.sku_code$": { [Op.like]: `%${searchTerm}%` } },
-        { "$Warehouse.name$": { [Op.like]: `%${searchTerm}%` } },
-        { "$partner.name$": { [Op.like]: `%${searchTerm}%` } },
-      ];
-    }
-
+    // 4. Performance Optimized Query (Distinct Primary Key)
     const { count, rows } = await db.StockTransaction.findAndCountAll({
       where: whereClause,
       include: [
@@ -1353,16 +1476,24 @@ const getTransactionHistory = async (req, res) => {
         ["date", "DESC"],
         ["id", "DESC"],
       ],
-      limit: parseInt(limit),
-      offset: parseInt(offset),
+      limit: parsedLimit,
+      offset: offset,
+      distinct: true,
+      col: "id",
       subQuery: false,
     });
 
+    const totalPages = isAll ? 1 : Math.ceil(count / parsedLimit);
+
+    // 5. Strictly Backward-Compatible Response Contract
     return res.status(200).json({
       success: true,
       totalItems: count,
-      totalPages: Math.ceil(count / limit),
-      currentPage: parseInt(page),
+      totalPages: totalPages,
+      currentPage: isAll ? 1 : parsedPage,
+      limit: parsedLimit,
+      hasNextPage: isAll ? false : parsedPage < totalPages,
+      hasPrevPage: isAll ? false : parsedPage > 1,
       data: rows,
     });
   } catch (error) {

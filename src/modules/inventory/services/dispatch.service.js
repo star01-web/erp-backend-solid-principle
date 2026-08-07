@@ -531,13 +531,43 @@ class DispatchService {
       resolvedSiteId = site ? site.id : filters.siteId;
     }
 
-    const logs = await this.logRepo.getDispatchLogs({
-      ...filters,
-      ...(resolvedSiteId && { siteId: resolvedSiteId }),
-    });
+    const MAX_PAGE_LIMIT = 2000;
+    const DEFAULT_PAGE_LIMIT = 20;
 
-    return logs.map((log) => ({
-      id: log.id,
+    const isPaginated =
+      filters.page !== undefined || filters.limit !== undefined;
+    const isAll =
+      String(filters.limit).toLowerCase() === "all" ||
+      parseInt(filters.limit, 10) === -1;
+    const rawPage = parseInt(filters.page, 10);
+    const parsedPage = rawPage > 0 ? rawPage : 1;
+
+    const rawLimit = parseInt(filters.limit, 10);
+    const parsedLimit = isAll
+      ? MAX_PAGE_LIMIT
+      : rawLimit > 0
+        ? Math.min(MAX_PAGE_LIMIT, rawLimit)
+        : DEFAULT_PAGE_LIMIT;
+    const offset = isAll ? 0 : (parsedPage - 1) * parsedLimit;
+
+    const options = isPaginated
+      ? { limit: parsedLimit, offset: offset }
+      : {};
+
+    const result = await this.logRepo.getDispatchLogs(
+      {
+        ...filters,
+        ...(resolvedSiteId && { siteId: resolvedSiteId }),
+      },
+      options,
+    );
+
+    const logs = Array.isArray(result) ? result : result.rows || [];
+    const count = Array.isArray(result) ? logs.length : result.count || 0;
+
+    const mappedData = logs.map((log) => ({
+      id: log.log_id || log.id,
+      log_id: log.log_id || log.id,
       site_id: log.site_id,
       site_name: log.site ? log.site.site_name : null,
       project_name: log.site ? log.site.project_name : null,
@@ -554,6 +584,22 @@ class DispatchService {
       created_by: log.created_by,
       createdAt: log.createdAt,
     }));
+
+    if (isPaginated) {
+      const totalPages = isAll ? 1 : Math.ceil(count / parsedLimit);
+      return {
+        count,
+        totalItems: count,
+        totalPages,
+        currentPage: isAll ? 1 : parsedPage,
+        limit: parsedLimit,
+        hasNextPage: isAll ? false : parsedPage < totalPages,
+        hasPrevPage: isAll ? false : parsedPage > 1,
+        data: mappedData,
+      };
+    }
+
+    return mappedData;
   }
 }
 

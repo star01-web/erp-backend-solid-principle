@@ -60,11 +60,25 @@ async function columnExists(table, column) {
       console.log(`✅ Step 1: Added \`total_stock\` to \`${products}\`.`);
     }
 
-    // Step 2: create the ledger table (Sequelize builds indexes + FKs from the model).
-    await db.SiteDispatchLog.sync();
-    console.log(
-      "✅ Step 2: Synced `inventory_site_dispatch_logs` (table + indexes + FKs).",
-    );
+    // Step 2: create or update the ledger table
+    const dispatchLogsTable = await findActualTableName("inventory_site_dispatch_logs");
+    if (!dispatchLogsTable) {
+      await db.SiteDispatchLog.sync();
+      console.log(
+        "✅ Step 2: Synced `inventory_site_dispatch_logs` (table + indexes + FKs).",
+      );
+    } else {
+      if (!(await columnExists(dispatchLogsTable, "reference_no"))) {
+        await qi.addColumn(dispatchLogsTable, "reference_no", {
+          type: DataTypes.STRING,
+          allowNull: true,
+          comment: "Reference/Challan/Invoice number for dispatch or return",
+        });
+        console.log(`✅ Step 2: Added \`reference_no\` to \`${dispatchLogsTable}\`.`);
+      } else {
+        console.log("ℹ️  Step 2: `reference_no` column already exists in ledger table.");
+      }
+    }
 
     console.log("\n🎉 Dispatch ledger migration completed successfully.");
     process.exit(0);
